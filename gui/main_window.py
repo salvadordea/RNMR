@@ -6,13 +6,15 @@ from PySide6.QtWidgets import (
     QPushButton, QLineEdit, QCheckBox, QTableWidget, QTableWidgetItem,
     QHeaderView, QProgressBar, QTextEdit, QLabel, QFileDialog,
     QGroupBox, QMessageBox, QDialog, QFormLayout, QToolButton,
-    QAbstractItemView, QSizePolicy
+    QAbstractItemView, QSizePolicy, QMenuBar, QMenu
 )
 from PySide6.QtCore import Qt, QThread, Slot
-from PySide6.QtGui import QIcon, QColor
+from PySide6.QtGui import QIcon, QColor, QAction
 
 from .theme import COLORS
 from .worker import ScanWorker, RenameWorker, RenameItem
+from .settings_dialog import SettingsDialog
+from .settings import load_settings
 
 
 class MetadataDialog(QDialog):
@@ -91,11 +93,17 @@ class MainWindow(QMainWindow):
         self.scan_thread: QThread | None = None
         self.rename_thread: QThread | None = None
 
+        # Load settings
+        self.settings = load_settings()
+
         # Setup UI
         self._setup_ui()
 
     def _setup_ui(self):
         """Setup the user interface."""
+        # Menu bar
+        self._create_menu_bar()
+
         central = QWidget()
         self.setCentralWidget(central)
 
@@ -117,6 +125,61 @@ class MainWindow(QMainWindow):
 
         # Initial state
         self._update_button_states()
+
+    def _create_menu_bar(self):
+        """Create the application menu bar."""
+        menubar = self.menuBar()
+
+        # File menu
+        file_menu = menubar.addMenu("File")
+
+        exit_action = QAction("Exit", self)
+        exit_action.setShortcut("Ctrl+Q")
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
+
+        # Settings menu
+        settings_menu = menubar.addMenu("Settings")
+
+        naming_action = QAction("Naming Format...", self)
+        naming_action.setShortcut("Ctrl+,")
+        naming_action.triggered.connect(self._show_settings)
+        settings_menu.addAction(naming_action)
+
+        # Help menu
+        help_menu = menubar.addMenu("Help")
+
+        about_action = QAction("About RNMR", self)
+        about_action.triggered.connect(self._show_about)
+        help_menu.addAction(about_action)
+
+    def _show_settings(self):
+        """Show the settings dialog."""
+        dialog = SettingsDialog(self)
+        dialog.settings_changed.connect(self._on_settings_changed)
+        dialog.exec()
+
+    def _on_settings_changed(self):
+        """Handle settings changes."""
+        self.settings = load_settings()
+        self._log("Settings updated. Rescan to apply new naming format.")
+
+    def _show_about(self):
+        """Show about dialog."""
+        QMessageBox.about(
+            self,
+            "About RNMR",
+            "<h3>RNMR - Media File Renamer</h3>"
+            "<p>Version 1.2.0</p>"
+            "<p>A tool for renaming media files using TMDB metadata.</p>"
+            "<p>Features:</p>"
+            "<ul>"
+            "<li>Automatic series/movie detection</li>"
+            "<li>TMDB integration for official titles</li>"
+            "<li>Customizable naming templates</li>"
+            "<li>Subtitle renaming support</li>"
+            "</ul>"
+        )
 
     def _create_controls_group(self) -> QGroupBox:
         """Create the top controls group."""
@@ -298,12 +361,14 @@ class MainWindow(QMainWindow):
         self.items.clear()
         self.log_text.clear()
 
-        # Create worker
+        # Create worker with templates from settings
         self.scan_worker = ScanWorker(
             folder_path=folder,
             recursive=self.recursive_cb.isChecked(),
             use_tmdb=self.tmdb_cb.isChecked(),
-            include_episode_title=self.episode_title_cb.isChecked()
+            include_episode_title=self.episode_title_cb.isChecked(),
+            series_template=self.settings.get("series_template"),
+            movie_template=self.settings.get("movie_template")
         )
 
         # Create thread

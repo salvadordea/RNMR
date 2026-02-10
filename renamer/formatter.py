@@ -1,8 +1,15 @@
 """Formatter module for generating final file names."""
 import re
 from pathlib import Path
+from typing import Any
 
 from .models import ParsedMedia, TMDBMovie, TMDBSeries, TMDBEpisode, SubtitleFile
+
+
+# Default templates
+DEFAULT_SERIES_TEMPLATE = "{title} - S{season:02d}E{episode:02d} - {episode_title}"
+DEFAULT_SERIES_TEMPLATE_NO_TITLE = "{title} - S{season:02d}E{episode:02d}"
+DEFAULT_MOVIE_TEMPLATE = "{title} ({year})"
 
 
 def sanitize_filename(name: str) -> str:
@@ -24,6 +31,164 @@ def sanitize_filename(name: str) -> str:
     # Replace multiple spaces with single space
     sanitized = re.sub(r'\s+', ' ', sanitized)
     return sanitized
+
+
+def render_template(template: str, data: dict[str, Any]) -> str:
+    """
+    Render a template with given data.
+
+    Args:
+        template: The template string with {variable} placeholders.
+        data: Data dictionary with values.
+
+    Returns:
+        Rendered string with variables replaced.
+
+    Raises:
+        KeyError: If a required variable is missing.
+        ValueError: If format specifier is invalid.
+    """
+    result = template
+
+    for key, value in data.items():
+        # Handle zero-padded formats like {season:02d}
+        if isinstance(value, int):
+            result = result.replace(f"{{{key}:02d}}", f"{value:02d}")
+            result = result.replace(f"{{{key}:02}}", f"{value:02d}")
+        else:
+            result = result.replace(f"{{{key}:02d}}", str(value))
+            result = result.replace(f"{{{key}:02}}", str(value))
+        # Handle plain replacement
+        result = result.replace(f"{{{key}}}", str(value))
+
+    # Check for any remaining unreplaced variables
+    remaining = re.findall(r'\{(\w+)(?::[^}]*)?\}', result)
+    if remaining:
+        raise KeyError(f"Missing template variable: {remaining[0]}")
+
+    return result
+
+
+def format_series_with_template(
+    series: TMDBSeries,
+    season: int,
+    episodes: list[int],
+    episode_details: list[TMDBEpisode] | None = None,
+    extension: str = "",
+    template: str | None = None
+) -> str:
+    """
+    Format a series filename using a template.
+
+    Args:
+        series: TMDB series info
+        season: Season number
+        episodes: List of episode numbers
+        episode_details: Optional episode details for titles
+        extension: File extension (including dot)
+        template: Template string (uses default if None)
+
+    Returns:
+        Formatted filename
+    """
+    # Use default template if none provided
+    if not template:
+        if episode_details and len(episode_details) == 1:
+            template = DEFAULT_SERIES_TEMPLATE
+        else:
+            template = DEFAULT_SERIES_TEMPLATE_NO_TITLE
+
+    # For multi-episode files, use template without episode title
+    if is_multi_episode(episodes):
+        template = DEFAULT_SERIES_TEMPLATE_NO_TITLE
+
+    # Build data dictionary
+    title = series.original_name if series.original_name else series.name
+    title = sanitize_filename(title)
+
+    episode_title = ""
+    if episode_details and len(episode_details) == 1:
+        episode_title = sanitize_filename(episode_details[0].name)
+
+    # Format episodes string for multi-episode
+    if len(episodes) == 1:
+        episodes_str = f"{episodes[0]:02d}"
+        episode_num = episodes[0]
+    else:
+        episodes_str = "E".join(f"{ep:02d}" for ep in sorted(episodes))
+        episode_num = episodes[0]
+
+    data = {
+        "title": title,
+        "season": season,
+        "episode": episode_num,
+        "episodes": episodes_str,
+        "episode_title": episode_title,
+        "year": series.first_air_year or "",
+    }
+
+    try:
+        # Remove episode_title placeholder if empty
+        if not episode_title and "{episode_title}" in template:
+            # Remove " - {episode_title}" pattern
+            template = re.sub(r'\s*-\s*\{episode_title\}', '', template)
+            template = re.sub(r'\{episode_title\}\s*-\s*', '', template)
+            template = template.replace("{episode_title}", "")
+
+        filename = render_template(template, data)
+        filename = sanitize_filename(filename)
+        return f"{filename}{extension}"
+
+    except (KeyError, ValueError):
+        # Fallback to default formatting
+        return format_series_name(
+            series, season, episodes, episode_details, extension, True
+        )
+
+
+def format_movie_with_template(
+    movie: TMDBMovie,
+    extension: str = "",
+    template: str | None = None
+) -> str:
+    """
+    Format a movie filename using a template.
+
+    Args:
+        movie: TMDB movie info
+        extension: File extension (including dot)
+        template: Template string (uses default if None)
+
+    Returns:
+        Formatted filename
+    """
+    if not template:
+        template = DEFAULT_MOVIE_TEMPLATE
+
+    title = movie.original_title if movie.original_title else movie.title
+    title = sanitize_filename(title)
+
+    data = {
+        "title": title,
+        "original_title": sanitize_filename(movie.original_title or movie.title),
+        "year": movie.year or "",
+    }
+
+    try:
+        # Remove year placeholder if empty
+        if not movie.year and "{year}" in template:
+            template = re.sub(r'\s*\(\{year\}\)', '', template)
+            template = re.sub(r'\[\{year\}\]\s*', '', template)
+            template = re.sub(r'\{year\}\s*-\s*', '', template)
+            template = template.replace("{year}", "")
+
+        filename = render_template(template, data)
+        filename = sanitize_filename(filename)
+        return f"{filename}{extension}"
+
+    except (KeyError, ValueError):
+        # Fallback to default formatting
+        return format_movie_name(movie, extension, keep_year=True)
 
 
 def format_episode_code(season: int, episodes: list[int]) -> str:

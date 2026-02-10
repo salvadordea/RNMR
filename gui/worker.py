@@ -13,7 +13,9 @@ from renamer.parser import parse_filename, is_media_file
 from renamer.tmdb import TMDBClient, TMDBError
 from renamer.formatter import (
     format_series_name,
+    format_series_with_template,
     format_movie_name,
+    format_movie_with_template,
     format_fallback,
     get_new_path,
     filenames_match
@@ -49,13 +51,17 @@ class ScanWorker(QObject):
         folder_path: str,
         recursive: bool,
         use_tmdb: bool,
-        include_episode_title: bool
+        include_episode_title: bool,
+        series_template: str | None = None,
+        movie_template: str | None = None
     ):
         super().__init__()
         self.folder_path = Path(folder_path)
         self.recursive = recursive
         self.use_tmdb = use_tmdb
         self.include_episode_title = include_episode_title
+        self.series_template = series_template
+        self.movie_template = movie_template
         self._cancelled = False
 
     def cancel(self):
@@ -175,20 +181,37 @@ class ScanWorker(QObject):
                                     episode_details.append(ep)
                                     metadata["episode_title"] = ep.name
 
-                        new_filename = format_series_name(
-                            series,
-                            parsed.season,
-                            parsed.episodes,
-                            episode_details if episode_details else None,
-                            extension,
-                            self.include_episode_title
-                        )
+                        # Use template if provided, otherwise use default formatting
+                        if self.series_template:
+                            new_filename = format_series_with_template(
+                                series,
+                                parsed.season,
+                                parsed.episodes,
+                                episode_details if episode_details else None,
+                                extension,
+                                self.series_template
+                            )
+                        else:
+                            new_filename = format_series_name(
+                                series,
+                                parsed.season,
+                                parsed.episodes,
+                                episode_details if episode_details else None,
+                                extension,
+                                self.include_episode_title
+                            )
                 else:
                     movie = tmdb_client.search_movie(parsed.title_guess, parsed.year)
                     if movie:
                         metadata["tmdb_id"] = movie.id
                         metadata["tmdb_title"] = movie.original_title or movie.title
-                        new_filename = format_movie_name(movie, extension, keep_year=True)
+                        # Use template if provided
+                        if self.movie_template:
+                            new_filename = format_movie_with_template(
+                                movie, extension, self.movie_template
+                            )
+                        else:
+                            new_filename = format_movie_name(movie, extension, keep_year=True)
 
             except Exception as e:
                 self.log.emit(f"[WARN] TMDB error for {filepath.name}: {e}")
