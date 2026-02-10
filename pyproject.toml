@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rnmr"
+version = "1.0.0"
+description = "A CLI tool for renaming media files using TMDB metadata"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "RNMR Contributors"}
+]
+keywords = ["media", "rename", "tmdb", "movies", "tv-series"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "requests>=2.28.0",
+]
+
+[project.scripts]
+renamer = "renamer.renamer:main"
+
+[project.urls]
+Homepage = "https://github.com/yourusername/RNMR"
+Repository = "https://github.com/yourusername/RNMR"
+Issues = "https://github.com/yourusername/RNMR/issues"
+
+[tool.setuptools.packages.find]
+include = ["renamer*"]
