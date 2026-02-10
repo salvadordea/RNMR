@@ -14,6 +14,7 @@ from .cache import Cache
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 DEFAULT_TIMEOUT = 10
 RATE_LIMIT_DELAY = 0.25  # 250ms between requests to avoid rate limiting
+DEFAULT_LANGUAGE = "en-US"  # Always use English for consistency
 
 
 def load_api_key() -> str | None:
@@ -91,7 +92,6 @@ class TMDBClient:
         self,
         api_key: str | None = None,
         cache: Cache | None = None,
-        language: str = "es-MX",
         interactive_callback: Callable[[list[dict], str], int | None] | None = None,
         verbose: bool = False
     ):
@@ -101,7 +101,6 @@ class TMDBClient:
         Args:
             api_key: TMDB API key. If not provided, attempts to load from env/.env.
             cache: Cache instance for storing lookups.
-            language: Language for results (default: Spanish Mexico).
             interactive_callback: Callback for interactive selection.
                                   Receives (results, title) and returns selected index or None.
             verbose: Enable verbose debug output.
@@ -119,10 +118,10 @@ class TMDBClient:
                 "Get your free API key at: https://www.themoviedb.org/settings/api"
             )
         self.cache = cache or Cache()
-        self.language = language
         self.interactive_callback = interactive_callback
         self.verbose = verbose
         self._last_request_time = 0.0
+        self._log(f"Using TMDB language: {DEFAULT_LANGUAGE}")
 
     def _log(self, message: str) -> None:
         """Print debug message if verbose mode is enabled."""
@@ -158,7 +157,7 @@ class TMDBClient:
         url = f"{TMDB_BASE_URL}{endpoint}"
         all_params = {
             "api_key": self.api_key,
-            "language": self.language,
+            "language": DEFAULT_LANGUAGE,
             **(params or {})
         }
 

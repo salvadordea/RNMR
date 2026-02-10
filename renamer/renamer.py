@@ -8,18 +8,20 @@ import argparse
 import sys
 from pathlib import Path
 
-from .parser import parse_filename, is_media_file, find_associated_subtitles
+from .parser import parse_filename, is_media_file
 from .tmdb import TMDBClient, TMDBError
 from .formatter import (
     format_series_name,
     format_movie_name,
     format_fallback,
-    format_subtitle_name,
     get_new_path,
     filenames_match
 )
 from .cache import Cache
-from .models import RenameResult, SubtitleFile
+from .models import RenameResult
+
+# Subtitle extensions we recognize
+SUBTITLE_EXTENSIONS = {'.srt', '.sub', '.ass', '.ssa', '.vtt'}
 
 # Global verbose flag
 VERBOSE = False
@@ -29,6 +31,62 @@ def log_verbose(message: str) -> None:
     """Print message if verbose mode is enabled."""
     if VERBOSE:
         print(f"  [DEBUG] {message}")
+
+
+def find_subtitles_for_video(video_path: Path) -> list[tuple[Path, str]]:
+    """
+    Find subtitle files that match the video file using startswith matching.
+
+    Args:
+        video_path: Path to the video file
+
+    Returns:
+        List of tuples: (subtitle_path, suffix_part)
+        suffix_part is everything after the video stem (e.g., ".en" for "video.en.srt")
+    """
+    original_base = video_path.stem
+    parent_dir = video_path.parent
+    subtitles = []
+
+    log_verbose(f"Matching subtitles for base: {original_base}")
+
+    if not parent_dir.exists():
+        return subtitles
+
+    for file in parent_dir.iterdir():
+        if not file.is_file():
+            continue
+
+        # Check if file has a subtitle extension
+        if file.suffix.lower() not in SUBTITLE_EXTENSIONS:
+            continue
+
+        # Get the stem without the subtitle extension
+        file_stem = file.stem
+
+        # Check if subtitle stem starts with video stem
+        if file_stem.startswith(original_base):
+            # Extract suffix part (e.g., ".en" from "video.en")
+            suffix_part = file_stem[len(original_base):]
+            log_verbose(f"Found subtitle: {file.name} (suffix: '{suffix_part}')")
+            subtitles.append((file, suffix_part))
+
+    return subtitles
+
+
+def build_subtitle_new_name(new_video_basename: str, suffix_part: str, extension: str) -> str:
+    """
+    Build new subtitle filename.
+
+    Args:
+        new_video_basename: New video filename without extension
+        suffix_part: The suffix part extracted from original subtitle (e.g., ".en")
+        extension: The subtitle extension (e.g., ".srt")
+
+    Returns:
+        New subtitle filename
+    """
+    return f"{new_video_basename}{suffix_part}{extension}"
 
 
 def print_video_diff(old_name: str, new_name: str) -> None:
@@ -130,7 +188,7 @@ def rename_file(source: Path, dest: Path, dry_run: bool) -> tuple[bool, str | No
 def process_subtitles(
     video_path: Path,
     new_video_basename: str,
-    subtitles: list[SubtitleFile],
+    subtitles: list[tuple[Path, str]],
     dry_run: bool
 ) -> list[RenameResult]:
     """
@@ -139,7 +197,7 @@ def process_subtitles(
     Args:
         video_path: Original video path
         new_video_basename: New video filename without extension
-        subtitles: List of associated subtitles
+        subtitles: List of tuples (subtitle_path, suffix_part)
         dry_run: If True, don't actually rename
 
     Returns:
@@ -147,9 +205,12 @@ def process_subtitles(
     """
     results = []
 
-    for sub in subtitles:
-        sub_path = Path(sub.path)
-        new_sub_name = format_subtitle_name(new_video_basename, sub)
+    for sub_path, suffix_part in subtitles:
+        new_sub_name = build_subtitle_new_name(
+            new_video_basename,
+            suffix_part,
+            sub_path.suffix
+        )
         new_sub_path = sub_path.parent / new_sub_name
 
         # Check if already named correctly
@@ -270,8 +331,9 @@ def process_file(
 
     new_path = get_new_path(filepath, new_filename)
 
-    # Find associated subtitles BEFORE checking if video needs renaming
-    subtitles = find_associated_subtitles(filepath)
+    # CRITICAL: Find subtitles BEFORE any renaming using original video stem
+    # This ensures we match subtitles based on the original filename
+    subtitles = find_subtitles_for_video(filepath)
 
     # Get new basename for subtitles (without video extension)
     new_basename = Path(new_filename).stem
@@ -290,22 +352,7 @@ def process_file(
         subtitle_results = process_subtitles(filepath, new_basename, subtitles, dry_run)
         return video_result, subtitle_results
 
-    # Rename video
-    success, error = rename_file(filepath, new_path, dry_run)
-
-    if error:
-        video_result = RenameResult(
-            original_path=str(filepath),
-            new_path=str(new_path),
-            success=False,
-            error=error,
-            skipped=True,
-            skip_reason=error,
-            file_type="video"
-        )
-        # Don't rename subtitles if video rename failed
-        return video_result, []
-
+    # Prepare video result (assume success)
     video_result = RenameResult(
         original_path=str(filepath),
         new_path=str(new_path),
@@ -313,8 +360,23 @@ def process_file(
         file_type="video"
     )
 
-    # Process subtitles
+    # Process subtitles FIRST (renames happen here if not dry_run)
+    # This ensures subtitles are renamed before video, while we still have original paths
     subtitle_results = process_subtitles(filepath, new_basename, subtitles, dry_run)
+
+    # Now perform actual video rename
+    if not dry_run:
+        success, error = rename_file(filepath, new_path, dry_run)
+        if not success:
+            video_result = RenameResult(
+                original_path=str(filepath),
+                new_path=str(new_path),
+                success=False,
+                error=error,
+                skipped=True,
+                skip_reason=error,
+                file_type="video"
+            )
 
     return video_result, subtitle_results
 
@@ -431,12 +493,6 @@ def main(args: list[str] | None = None) -> int:
         help="Limit number of files to process"
     )
     parser.add_argument(
-        "--language",
-        type=str,
-        default="es-MX",
-        help="Language for TMDB results (default: es-MX)"
-    )
-    parser.add_argument(
         "--cache-dir",
         type=Path,
         default=None,
@@ -470,7 +526,6 @@ def main(args: list[str] | None = None) -> int:
             interactive_cb = interactive_select if parsed_args.interactive else None
             tmdb_client = TMDBClient(
                 cache=cache,
-                language=parsed_args.language,
                 interactive_callback=interactive_cb,
                 verbose=VERBOSE
             )
