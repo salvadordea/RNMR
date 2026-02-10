@@ -25,7 +25,7 @@ A CLI tool for renaming media files (movies and TV series) using TMDB metadata.
 ## Installation
 
 ```bash
-git clone https://github.com/yourusername/RNMR.git
+git clone https://github.com/salvadordea/RNMR.git
 cd RNMR
 pip install -e .
 ```

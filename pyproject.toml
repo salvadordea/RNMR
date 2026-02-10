@@ -42,9 +42,9 @@ renamer = "renamer.renamer:main"
 renamer-gui = "gui.main:main"
 
 [project.urls]
-Homepage = "https://github.com/yourusername/RNMR"
-Repository = "https://github.com/yourusername/RNMR"
-Issues = "https://github.com/yourusername/RNMR/issues"
+Homepage = "https://github.com/salvadordea/RNMR"
+Repository = "https://github.com/salvadordea/RNMR"
+Issues = "https://github.com/salvadordea/RNMR/issues"
 
 [tool.setuptools.packages.find]
 include = ["renamer*", "gui*"]
