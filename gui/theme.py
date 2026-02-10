@@ -28,8 +28,8 @@ QMainWindow {{
 QWidget {{
     background-color: {COLORS["background"]};
     color: {COLORS["text"]};
-    font-family: "Segoe UI", "SF Pro Display", sans-serif;
-    font-size: 13px;
+    font-family: "Segoe UI", "SF Pro Display", "Arial", sans-serif;
+    font-size: 13pt;
 }}
 
 /* Group Boxes */
@@ -251,8 +251,8 @@ QTextEdit {{
     border: 1px solid {COLORS["border"]};
     border-radius: 8px;
     padding: 8px;
-    font-family: "Cascadia Code", "Consolas", monospace;
-    font-size: 12px;
+    font-family: "Cascadia Code", "Consolas", "Courier New", monospace;
+    font-size: 12pt;
 }}
 
 /* Tool Button (Collapse) */
