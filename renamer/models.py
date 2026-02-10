@@ -53,3 +53,12 @@ class RenameResult:
     error: str | None = None
     skipped: bool = False
     skip_reason: str | None = None
+    file_type: Literal["video", "subtitle"] = "video"
+
+
+@dataclass
+class SubtitleFile:
+    """Represents a subtitle file associated with a video."""
+    path: str
+    language_suffix: str  # e.g., "en", "es", or "" for no language
+    extension: str  # e.g., ".srt"

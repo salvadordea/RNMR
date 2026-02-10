@@ -7,12 +7,15 @@ A CLI tool for renaming media files (movies and TV series) using TMDB metadata.
 - Automatic detection of movies and TV series
 - Episode pattern recognition (S01E04, 1x04, S01E04E05, etc.)
 - TMDB integration for official titles and episode names
+- **Original title priority** - uses original language titles by default
+- **Subtitle support** - automatically renames associated .srt files
 - Local caching to minimize API calls
 - Smart title matching using similarity scoring
 - Interactive mode for ambiguous matches
 - Dry-run mode for safe previewing
+- Confirmation prompt before renaming
+- File limit for batch processing
 - Recursive directory processing
-- Spanish language support (configurable)
 
 ## Requirements
 
@@ -35,7 +38,9 @@ pip install -r requirements.txt
 
 ## Configuration
 
-Set your TMDB API key as an environment variable:
+Set your TMDB API key using one of these methods:
+
+### Option 1: Environment Variable
 
 ```bash
 # Linux/macOS
@@ -46,6 +51,14 @@ $env:TMDB_API_KEY="your_key_here"
 
 # Windows (CMD)
 set TMDB_API_KEY=your_key_here
+```
+
+### Option 2: .env File
+
+Create a `.env` file in your current directory or home directory:
+
+```
+TMDB_API_KEY=your_key_here
 ```
 
 ## Usage
@@ -61,6 +74,12 @@ python -m renamer /path/to/media --use-tmdb
 
 # Recursive processing with dry run
 python -m renamer /path/to/media --recursive --use-tmdb --dry-run
+
+# With confirmation prompt
+python -m renamer /path/to/media --use-tmdb --confirm
+
+# Limit to first 10 files
+python -m renamer /path/to/media --use-tmdb --limit 10
 ```
 
 ### Options
@@ -74,6 +93,8 @@ python -m renamer /path/to/media --recursive --use-tmdb --dry-run
 | `--keep-year` | Include year in movie names (default) |
 | `--no-year` | Don't include year in movie names |
 | `--no-episode-title` | Don't include episode title in series names |
+| `--confirm` | Ask for confirmation before renaming |
+| `--limit N` | Limit number of files to process |
 | `--language LANG` | Language for TMDB results (default: es-MX) |
 | `--cache-dir PATH` | Directory for cache file |
 
@@ -88,23 +109,87 @@ python -m renamer /media/series --recursive --use-tmdb --interactive
 
 # Process without episode titles
 python -m renamer /media/series --use-tmdb --no-episode-title
+
+# Process with confirmation
+python -m renamer /media/series --use-tmdb --confirm
 ```
 
 ### Output Format
 
-**Series:**
+**Series (single episode):**
 ```
-{Official Series Title} - S{season:02}E{episode:02} - {Episode Name}.ext
+{Original Series Title} - S{season:02}E{episode:02} - {Episode Name}.ext
 ```
-Example: `Breaking Bad - S01E01 - Pilot.mkv`
+Example: `A Knight of the Seven Kingdoms - S01E04 - The Oath.mkv`
 
-Multi-episode: `Breaking Bad - S01E04E05 - Gray Matter.mkv`
+**Series (multi-episode):**
+```
+{Original Series Title} - S{season:02}E{episode:02}E{episode:02}.ext
+```
+Example: `Breaking Bad - S01E04E05.mkv`
+
+Note: Episode titles are NOT included for multi-episode files.
 
 **Movies:**
 ```
-{Official Title} ({Year}).ext
+{Original Title} ({Year}).ext
 ```
 Example: `The Matrix (1999).mkv`
+
+### Subtitle Handling
+
+When renaming a video file, the tool automatically finds and renames associated subtitle files:
+
+**Before:**
+```
+Show.S01E04.mkv
+Show.S01E04.en.srt
+Show.S01E04.es.srt
+```
+
+**After:**
+```
+Show - S01E04 - Episode Name.mkv
+Show - S01E04 - Episode Name.en.srt
+Show - S01E04 - Episode Name.es.srt
+```
+
+Rules:
+- Only subtitles with EXACT matching base name are renamed
+- Language suffixes are preserved (.en.srt, .es.srt, etc.)
+- Respects --dry-run flag
+
+### Output Example
+
+```
+python renamer.py /media --recursive --use-tmdb --dry-run
+
+Found 2 media file(s)
+[DRY RUN - no files will be renamed]
+
+Video:
+  El.caballero.de.los.Siete.Reinos.S01E04.2026.WEB-DL.mkv
+  -> A Knight of the Seven Kingdoms - S01E04 - The Oath.mkv
+Subtitle:
+  El.caballero.de.los.Siete.Reinos.S01E04.en.srt
+  -> A Knight of the Seven Kingdoms - S01E04 - The Oath.en.srt
+
+Video:
+  The.Matrix.1999.BluRay.1080p.mkv
+  -> The Matrix (1999).mkv
+
+--------------------------------------------------
+Would rename: 3 files
+```
+
+## Title Priority
+
+The tool prioritizes **original language titles** over localized titles:
+
+- For TV Series: Uses `original_name` from TMDB
+- For Movies: Uses `original_title` from TMDB
+
+This ensures consistency regardless of your locale settings.
 
 ## Detected Patterns
 
@@ -123,18 +208,28 @@ Noise removal includes:
 
 ## Cache
 
-The tool creates a `.renamer_cache.json` file to store TMDB lookups, avoiding repeated API calls for:
+The tool creates a `.renamer_cache.json` file to store TMDB lookups:
+
 - Title to TMDB ID mappings
 - Movie search results
 - Series search results
-- Episode details
+- Episode details (including episode titles)
+
+This avoids repeated API calls for the same content.
+
+## Safety Features
+
+- **No overwrites**: Skips if destination file exists
+- **Error isolation**: Single file failures don't stop the batch
+- **Dry-run mode**: Always preview before renaming
+- **Confirmation prompt**: Optional confirmation before execution
 
 ## Project Structure
 
 ```
 renamer/
   renamer.py     # CLI entrypoint
-  parser.py      # Filename parsing
+  parser.py      # Filename parsing + subtitle detection
   tmdb.py        # TMDB API client
   formatter.py   # Output formatting
   cache.py       # Local JSON cache

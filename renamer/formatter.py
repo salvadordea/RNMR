@@ -2,7 +2,7 @@
 import re
 from pathlib import Path
 
-from .models import ParsedMedia, TMDBMovie, TMDBSeries, TMDBEpisode
+from .models import ParsedMedia, TMDBMovie, TMDBSeries, TMDBEpisode, SubtitleFile
 
 
 def sanitize_filename(name: str) -> str:
@@ -15,7 +15,7 @@ def sanitize_filename(name: str) -> str:
     Returns:
         Sanitized name safe for use as a filename
     """
-    # Characters not allowed in Windows filenames
+    # Characters not allowed in Windows filenames: / \ : * ? " < > |
     invalid_chars = r'[<>:"/\\|?*]'
     # Replace with empty string
     sanitized = re.sub(invalid_chars, '', name)
@@ -44,6 +44,11 @@ def format_episode_code(season: int, episodes: list[int]) -> str:
     return f"S{season:02d}{episode_parts}"
 
 
+def is_multi_episode(episodes: list[int]) -> bool:
+    """Check if this is a multi-episode file."""
+    return len(episodes) > 1
+
+
 def format_series_name(
     series: TMDBSeries,
     season: int,
@@ -55,7 +60,9 @@ def format_series_name(
     """
     Format a series episode filename.
 
-    Format: {Official Series Title} - S{season:02}E{episode:02} - {Episode Name}.ext
+    Format: {Original Series Title} - S{season:02}E{episode:02} - {Episode Name}.ext
+
+    For multi-episode files, episode title is NOT included.
 
     Args:
         series: TMDB series info
@@ -68,8 +75,8 @@ def format_series_name(
     Returns:
         Formatted filename
     """
-    # Use Spanish name if available, otherwise original
-    series_title = series.name if series.name else series.original_name
+    # PRIORITY: Use original_name first, fallback to localized name
+    series_title = series.original_name if series.original_name else series.name
     series_title = sanitize_filename(series_title)
 
     # Format episode code
@@ -78,18 +85,15 @@ def format_series_name(
     # Build filename
     parts = [series_title, ep_code]
 
-    # Add episode title if requested and available
-    if include_episode_title and episode_details:
-        if len(episode_details) == 1:
-            ep_title = sanitize_filename(episode_details[0].name)
-            if ep_title:
-                parts.append(ep_title)
-        elif len(episode_details) > 1:
-            # For multi-episode, combine titles or use first
-            titles = [sanitize_filename(ep.name) for ep in episode_details if ep.name]
-            if titles:
-                # Use first episode title with indication of multi-episode
-                parts.append(titles[0])
+    # For multi-episode files, NEVER include episode title
+    if is_multi_episode(episodes):
+        include_episode_title = False
+
+    # Add episode title if requested and available (single episode only)
+    if include_episode_title and episode_details and len(episode_details) == 1:
+        ep_title = sanitize_filename(episode_details[0].name)
+        if ep_title:
+            parts.append(ep_title)
 
     filename = " - ".join(parts)
     return f"{filename}{extension}"
@@ -103,7 +107,7 @@ def format_movie_name(
     """
     Format a movie filename.
 
-    Format: {Official Title} ({Year}).ext
+    Format: {Original Title} ({Year}).ext
 
     Args:
         movie: TMDB movie info
@@ -113,8 +117,8 @@ def format_movie_name(
     Returns:
         Formatted filename
     """
-    # Use Spanish title if available, otherwise original
-    title = movie.title if movie.title else movie.original_title
+    # PRIORITY: Use original_title first, fallback to localized title
+    title = movie.original_title if movie.original_title else movie.title
     title = sanitize_filename(title)
 
     if keep_year and movie.year:
@@ -150,6 +154,25 @@ def format_fallback(
         filename = title
 
     return f"{filename}{extension}"
+
+
+def format_subtitle_name(
+    new_video_basename: str,
+    subtitle: SubtitleFile
+) -> str:
+    """
+    Format a subtitle filename based on the new video name.
+
+    Args:
+        new_video_basename: New video filename without extension
+        subtitle: SubtitleFile with language suffix info
+
+    Returns:
+        New subtitle filename with preserved language suffix
+    """
+    if subtitle.language_suffix:
+        return f"{new_video_basename}.{subtitle.language_suffix}{subtitle.extension}"
+    return f"{new_video_basename}{subtitle.extension}"
 
 
 def get_new_path(

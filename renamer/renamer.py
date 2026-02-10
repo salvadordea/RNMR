@@ -5,30 +5,49 @@ RNMR - Media File Renamer
 A CLI tool for renaming media files using TMDB metadata.
 """
 import argparse
-import os
 import sys
 from pathlib import Path
 
-from .parser import parse_filename, is_media_file
-from .tmdb import TMDBClient
+from .parser import parse_filename, is_media_file, find_associated_subtitles
+from .tmdb import TMDBClient, TMDBError
 from .formatter import (
     format_series_name,
     format_movie_name,
     format_fallback,
+    format_subtitle_name,
     get_new_path,
     filenames_match
 )
 from .cache import Cache
-from .models import RenameResult, ParsedMedia
+from .models import RenameResult, SubtitleFile
 
 
-def print_diff(old_name: str, new_name: str, is_skip: bool = False) -> None:
-    """Print the rename diff."""
-    if is_skip:
-        print(f"  [SKIP] {old_name}")
-    else:
-        print(f"  {old_name}")
-        print(f"    -> {new_name}")
+def print_video_diff(old_name: str, new_name: str) -> None:
+    """Print the video rename diff."""
+    print(f"Video:")
+    print(f"  {old_name}")
+    print(f"  -> {new_name}")
+
+
+def print_subtitle_diff(old_name: str, new_name: str) -> None:
+    """Print the subtitle rename diff."""
+    print(f"Subtitle:")
+    print(f"  {old_name}")
+    print(f"  -> {new_name}")
+
+
+def print_skip(old_name: str, reason: str, file_type: str = "Video") -> None:
+    """Print skip message."""
+    print(f"{file_type}:")
+    print(f"  [SKIP] {old_name}")
+    print(f"         Reason: {reason}")
+
+
+def print_error(old_name: str, error: str, file_type: str = "Video") -> None:
+    """Print error message."""
+    print(f"{file_type}:")
+    print(f"  [ERROR] {old_name}")
+    print(f"          {error}")
 
 
 def interactive_select(results: list[dict], title: str) -> int | None:
@@ -74,15 +93,100 @@ def interactive_select(results: list[dict], title: str) -> int | None:
         print("Invalid choice. Try again.")
 
 
+def rename_file(source: Path, dest: Path, dry_run: bool) -> tuple[bool, str | None]:
+    """
+    Rename a file safely.
+
+    Args:
+        source: Source path
+        dest: Destination path
+        dry_run: If True, don't actually rename
+
+    Returns:
+        Tuple of (success, error_message)
+    """
+    # Check if destination already exists (and is not the same file)
+    if dest.exists() and source.resolve() != dest.resolve():
+        return False, "Destination file already exists"
+
+    if not dry_run:
+        try:
+            source.rename(dest)
+        except OSError as e:
+            return False, str(e)
+
+    return True, None
+
+
+def process_subtitles(
+    video_path: Path,
+    new_video_basename: str,
+    subtitles: list[SubtitleFile],
+    dry_run: bool
+) -> list[RenameResult]:
+    """
+    Process and rename subtitles associated with a video.
+
+    Args:
+        video_path: Original video path
+        new_video_basename: New video filename without extension
+        subtitles: List of associated subtitles
+        dry_run: If True, don't actually rename
+
+    Returns:
+        List of RenameResult for each subtitle
+    """
+    results = []
+
+    for sub in subtitles:
+        sub_path = Path(sub.path)
+        new_sub_name = format_subtitle_name(new_video_basename, sub)
+        new_sub_path = sub_path.parent / new_sub_name
+
+        # Check if already named correctly
+        if filenames_match(sub_path.name, new_sub_name):
+            results.append(RenameResult(
+                original_path=str(sub_path),
+                new_path=str(new_sub_path),
+                success=True,
+                skipped=True,
+                skip_reason="Already named correctly",
+                file_type="subtitle"
+            ))
+            continue
+
+        success, error = rename_file(sub_path, new_sub_path, dry_run)
+
+        if error:
+            results.append(RenameResult(
+                original_path=str(sub_path),
+                new_path=str(new_sub_path),
+                success=False,
+                error=error,
+                skipped=True,
+                skip_reason=error,
+                file_type="subtitle"
+            ))
+        else:
+            results.append(RenameResult(
+                original_path=str(sub_path),
+                new_path=str(new_sub_path),
+                success=True,
+                file_type="subtitle"
+            ))
+
+    return results
+
+
 def process_file(
     filepath: Path,
     tmdb_client: TMDBClient | None,
     dry_run: bool = True,
     keep_year: bool = True,
     include_episode_title: bool = True
-) -> RenameResult:
+) -> tuple[RenameResult, list[RenameResult]]:
     """
-    Process a single media file.
+    Process a single media file and its associated subtitles.
 
     Args:
         filepath: Path to the file
@@ -92,7 +196,7 @@ def process_file(
         include_episode_title: Include episode title for series
 
     Returns:
-        RenameResult with operation details
+        Tuple of (video_result, subtitle_results)
     """
     # Parse the filename
     parsed = parse_filename(filepath)
@@ -106,14 +210,15 @@ def process_file(
             if parsed.media_type == "series":
                 series = tmdb_client.search_series(parsed.title_guess)
                 if series and parsed.season is not None:
-                    # Get episode details
+                    # Get episode details (only for single episodes when needed)
                     episode_details = []
-                    for ep_num in parsed.episodes:
-                        ep = tmdb_client.get_episode_details(
-                            series.id, parsed.season, ep_num
-                        )
-                        if ep:
-                            episode_details.append(ep)
+                    if include_episode_title and len(parsed.episodes) == 1:
+                        for ep_num in parsed.episodes:
+                            ep = tmdb_client.get_episode_details(
+                                series.id, parsed.season, ep_num
+                            )
+                            if ep:
+                                episode_details.append(ep)
 
                     new_filename = format_series_name(
                         series,
@@ -138,44 +243,53 @@ def process_file(
 
     new_path = get_new_path(filepath, new_filename)
 
-    # Check if already named correctly
+    # Find associated subtitles BEFORE checking if video needs renaming
+    subtitles = find_associated_subtitles(filepath)
+
+    # Get new basename for subtitles (without video extension)
+    new_basename = Path(new_filename).stem
+
+    # Check if video already named correctly
     if filenames_match(filepath.name, new_filename):
-        return RenameResult(
+        video_result = RenameResult(
             original_path=str(filepath),
             new_path=str(new_path),
             success=True,
             skipped=True,
-            skip_reason="Already named correctly"
+            skip_reason="Already named correctly",
+            file_type="video"
         )
+        # Still process subtitles even if video is already named correctly
+        subtitle_results = process_subtitles(filepath, new_basename, subtitles, dry_run)
+        return video_result, subtitle_results
 
-    # Check for duplicate
-    if new_path.exists() and new_path != filepath:
-        return RenameResult(
+    # Rename video
+    success, error = rename_file(filepath, new_path, dry_run)
+
+    if error:
+        video_result = RenameResult(
             original_path=str(filepath),
             new_path=str(new_path),
             success=False,
-            error="Destination file already exists",
+            error=error,
             skipped=True,
-            skip_reason="Duplicate file exists"
+            skip_reason=error,
+            file_type="video"
         )
+        # Don't rename subtitles if video rename failed
+        return video_result, []
 
-    # Perform rename if not dry run
-    if not dry_run:
-        try:
-            filepath.rename(new_path)
-        except OSError as e:
-            return RenameResult(
-                original_path=str(filepath),
-                new_path=str(new_path),
-                success=False,
-                error=str(e)
-            )
-
-    return RenameResult(
+    video_result = RenameResult(
         original_path=str(filepath),
         new_path=str(new_path),
-        success=True
+        success=True,
+        file_type="video"
     )
+
+    # Process subtitles
+    subtitle_results = process_subtitles(filepath, new_basename, subtitles, dry_run)
+
+    return video_result, subtitle_results
 
 
 def find_media_files(path: Path, recursive: bool = False) -> list[Path]:
@@ -208,6 +322,25 @@ def find_media_files(path: Path, recursive: bool = False) -> list[Path]:
                 files.append(item)
 
     return sorted(files)
+
+
+def confirm_proceed(count: int) -> bool:
+    """
+    Ask user to confirm proceeding with rename.
+
+    Args:
+        count: Number of files to rename
+
+    Returns:
+        True if user confirms, False otherwise
+    """
+    while True:
+        response = input(f"\nProceed with renaming {count} files? (y/n): ").strip().lower()
+        if response in ('y', 'yes'):
+            return True
+        if response in ('n', 'no'):
+            return False
+        print("Please enter 'y' or 'n'.")
 
 
 def main(args: list[str] | None = None) -> int:
@@ -259,6 +392,18 @@ def main(args: list[str] | None = None) -> int:
         help="Don't include episode title in series filenames"
     )
     parser.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Ask for confirmation before renaming"
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Limit number of files to process"
+    )
+    parser.add_argument(
         "--language",
         type=str,
         default="es-MX",
@@ -284,20 +429,17 @@ def main(args: list[str] | None = None) -> int:
     # Setup TMDB client if needed
     tmdb_client = None
     if parsed_args.use_tmdb:
-        api_key = os.environ.get("TMDB_API_KEY")
-        if not api_key:
-            print("Error: TMDB_API_KEY environment variable not set.")
-            print("Set it with: export TMDB_API_KEY=your_key_here")
+        try:
+            cache = Cache(parsed_args.cache_dir)
+            interactive_cb = interactive_select if parsed_args.interactive else None
+            tmdb_client = TMDBClient(
+                cache=cache,
+                language=parsed_args.language,
+                interactive_callback=interactive_cb
+            )
+        except TMDBError as e:
+            print(f"Error: {e}")
             return 1
-
-        cache = Cache(parsed_args.cache_dir)
-        interactive_cb = interactive_select if parsed_args.interactive else None
-        tmdb_client = TMDBClient(
-            api_key=api_key,
-            cache=cache,
-            language=parsed_args.language,
-            interactive_callback=interactive_cb
-        )
 
     # Find media files
     files = find_media_files(parsed_args.path, parsed_args.recursive)
@@ -305,49 +447,116 @@ def main(args: list[str] | None = None) -> int:
         print("No media files found.")
         return 0
 
+    # Apply limit if specified
+    if parsed_args.limit and parsed_args.limit > 0:
+        files = files[:parsed_args.limit]
+
     print(f"Found {len(files)} media file(s)")
     if parsed_args.dry_run:
         print("[DRY RUN - no files will be renamed]\n")
     else:
         print()
 
-    # Process files
-    results = []
+    # First pass: collect all rename operations for preview
+    all_operations: list[tuple[RenameResult, list[RenameResult]]] = []
+
+    for filepath in files:
+        video_result, subtitle_results = process_file(
+            filepath,
+            tmdb_client,
+            dry_run=True,  # Always dry-run first for preview
+            keep_year=keep_year,
+            include_episode_title=not parsed_args.no_episode_title
+        )
+        all_operations.append((video_result, subtitle_results))
+
+    # Display preview
+    rename_count = 0
+    for video_result, subtitle_results in all_operations:
+        video_old = Path(video_result.original_path).name
+        video_new = Path(video_result.new_path).name
+
+        if video_result.skipped:
+            if video_result.skip_reason != "Already named correctly":
+                print_skip(video_old, video_result.skip_reason or "Unknown", "Video")
+        elif video_result.success:
+            print_video_diff(video_old, video_new)
+            rename_count += 1
+        else:
+            print_error(video_old, video_result.error or "Unknown error", "Video")
+
+        # Show subtitle operations
+        for sub_result in subtitle_results:
+            sub_old = Path(sub_result.original_path).name
+            sub_new = Path(sub_result.new_path).name
+
+            if sub_result.skipped:
+                if sub_result.skip_reason != "Already named correctly":
+                    print_skip(sub_old, sub_result.skip_reason or "Unknown", "Subtitle")
+            elif sub_result.success:
+                print_subtitle_diff(sub_old, sub_new)
+                rename_count += 1
+            else:
+                print_error(sub_old, sub_result.error or "Unknown error", "Subtitle")
+
+        print()  # Blank line between files
+
+    # If dry run, show summary and exit
+    if parsed_args.dry_run:
+        print("-" * 50)
+        print(f"Would rename: {rename_count} files")
+        return 0
+
+    # If no files to rename, exit
+    if rename_count == 0:
+        print("-" * 50)
+        print("No files to rename.")
+        return 0
+
+    # Ask for confirmation if --confirm is set
+    if parsed_args.confirm:
+        if not confirm_proceed(rename_count):
+            print("Cancelled.")
+            return 0
+
+    # Second pass: actually perform renames
+    print("\nRenaming files...")
+    print("-" * 50)
+
     renamed_count = 0
     skipped_count = 0
     error_count = 0
 
     for filepath in files:
-        result = process_file(
+        video_result, subtitle_results = process_file(
             filepath,
             tmdb_client,
-            dry_run=parsed_args.dry_run,
+            dry_run=False,  # Actually rename
             keep_year=keep_year,
             include_episode_title=not parsed_args.no_episode_title
         )
-        results.append(result)
 
-        old_name = Path(result.original_path).name
-        new_name = Path(result.new_path).name
-
-        if result.skipped:
+        # Count video result
+        if video_result.skipped:
             skipped_count += 1
-            print_diff(old_name, new_name, is_skip=True)
-            if result.skip_reason:
-                print(f"       Reason: {result.skip_reason}")
-        elif result.success:
+        elif video_result.success:
             renamed_count += 1
-            print_diff(old_name, new_name)
         else:
             error_count += 1
-            print(f"  [ERROR] {old_name}")
-            print(f"          {result.error}")
+
+        # Count subtitle results
+        for sub_result in subtitle_results:
+            if sub_result.skipped:
+                skipped_count += 1
+            elif sub_result.success:
+                renamed_count += 1
+            else:
+                error_count += 1
 
     # Summary
     print()
     print("-" * 50)
-    action = "Would rename" if parsed_args.dry_run else "Renamed"
-    print(f"{action}: {renamed_count} | Skipped: {skipped_count} | Errors: {error_count}")
+    print(f"Renamed: {renamed_count} | Skipped: {skipped_count} | Errors: {error_count}")
 
     return 0 if error_count == 0 else 1
 

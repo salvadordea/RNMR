@@ -1,7 +1,7 @@
 """Parser module for extracting media information from file names."""
 import re
 from pathlib import Path
-from .models import ParsedMedia
+from .models import ParsedMedia, SubtitleFile
 
 
 # Patterns to remove (noise)
@@ -43,6 +43,17 @@ EPISODE_PATTERNS = [
 
 # Year pattern
 YEAR_PATTERN = r'\b((?:19|20)\d{2})\b'
+
+# Subtitle extensions
+SUBTITLE_EXTENSIONS = {'.srt', '.sub', '.ass', '.ssa', '.vtt'}
+
+# Common language codes for subtitles
+LANGUAGE_CODES = {
+    'en', 'es', 'fr', 'de', 'it', 'pt', 'ru', 'ja', 'ko', 'zh',
+    'ar', 'nl', 'pl', 'tr', 'vi', 'th', 'id', 'hi', 'he', 'cs',
+    'eng', 'spa', 'fra', 'deu', 'ita', 'por', 'rus', 'jpn', 'kor', 'zho',
+    'lat', 'forced', 'sdh', 'cc'
+}
 
 
 def normalize_separators(name: str) -> str:
@@ -178,3 +189,94 @@ def is_media_file(filepath: Path) -> bool:
         '.m4v', '.mpg', '.mpeg', '.m2ts', '.ts', '.vob', '.ogm'
     }
     return filepath.suffix.lower() in media_extensions
+
+
+def is_subtitle_file(filepath: Path) -> bool:
+    """Check if file is a subtitle file based on extension."""
+    # Handle compound extensions like .en.srt
+    suffixes = filepath.suffixes
+    if suffixes:
+        return suffixes[-1].lower() in SUBTITLE_EXTENSIONS
+    return False
+
+
+def get_subtitle_base_name(filepath: Path) -> str:
+    """
+    Get the base name of a subtitle file without language suffix.
+
+    For "Show.S01E04.en.srt" returns "Show.S01E04"
+    For "Show.S01E04.srt" returns "Show.S01E04"
+    """
+    name = filepath.name
+    suffixes = filepath.suffixes
+
+    if len(suffixes) >= 2:
+        # Check if second-to-last suffix is a language code
+        potential_lang = suffixes[-2].lstrip('.')
+        if potential_lang.lower() in LANGUAGE_CODES:
+            # Remove both language and subtitle extension
+            return filepath.stem.rsplit('.', 1)[0]
+
+    # Just remove the subtitle extension
+    return filepath.stem
+
+
+def parse_subtitle_file(filepath: Path) -> SubtitleFile:
+    """
+    Parse a subtitle file path to extract language suffix and extension.
+
+    Args:
+        filepath: Path to the subtitle file
+
+    Returns:
+        SubtitleFile with path, language suffix, and extension
+    """
+    suffixes = filepath.suffixes
+    language_suffix = ""
+    extension = suffixes[-1] if suffixes else ""
+
+    if len(suffixes) >= 2:
+        potential_lang = suffixes[-2].lstrip('.')
+        if potential_lang.lower() in LANGUAGE_CODES:
+            language_suffix = potential_lang
+
+    return SubtitleFile(
+        path=str(filepath),
+        language_suffix=language_suffix,
+        extension=extension
+    )
+
+
+def find_associated_subtitles(video_path: Path) -> list[SubtitleFile]:
+    """
+    Find subtitle files associated with a video file.
+
+    Only matches subtitles with EXACT same base name as the video.
+
+    Args:
+        video_path: Path to the video file
+
+    Returns:
+        List of SubtitleFile objects
+    """
+    video_stem = video_path.stem
+    parent_dir = video_path.parent
+    subtitles = []
+
+    if not parent_dir.exists():
+        return subtitles
+
+    for file in parent_dir.iterdir():
+        if not file.is_file():
+            continue
+        if not is_subtitle_file(file):
+            continue
+
+        # Get the base name of the subtitle (without language suffix)
+        sub_base = get_subtitle_base_name(file)
+
+        # Exact match required
+        if sub_base == video_stem:
+            subtitles.append(parse_subtitle_file(file))
+
+    return subtitles

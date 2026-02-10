@@ -2,6 +2,7 @@
 import os
 import time
 from difflib import SequenceMatcher
+from pathlib import Path
 from typing import Callable
 
 import requests
@@ -13,6 +14,50 @@ from .cache import Cache
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 DEFAULT_TIMEOUT = 10
 RATE_LIMIT_DELAY = 0.25  # 250ms between requests to avoid rate limiting
+
+
+def load_api_key() -> str | None:
+    """
+    Load TMDB API key from environment or .env file.
+
+    Priority:
+    1. TMDB_API_KEY environment variable
+    2. .env file in current directory
+    3. .env file in user home directory
+
+    Returns:
+        API key string or None if not found
+    """
+    # First check environment variable
+    api_key = os.environ.get("TMDB_API_KEY")
+    if api_key:
+        return api_key
+
+    # Try to load from .env files using python-dotenv if available
+    try:
+        from dotenv import load_dotenv
+
+        # Try current directory first
+        env_path = Path.cwd() / ".env"
+        if env_path.exists():
+            load_dotenv(env_path)
+            api_key = os.environ.get("TMDB_API_KEY")
+            if api_key:
+                return api_key
+
+        # Try home directory
+        home_env = Path.home() / ".env"
+        if home_env.exists():
+            load_dotenv(home_env)
+            api_key = os.environ.get("TMDB_API_KEY")
+            if api_key:
+                return api_key
+
+    except ImportError:
+        # python-dotenv not installed, skip .env loading
+        pass
+
+    return None
 
 
 def normalize_for_comparison(text: str) -> str:
@@ -34,6 +79,11 @@ def similarity_score(s1: str, s2: str) -> float:
     return SequenceMatcher(None, s1_norm, s2_norm).ratio()
 
 
+class TMDBError(Exception):
+    """Exception raised for TMDB API errors."""
+    pass
+
+
 class TMDBClient:
     """Client for TMDB API."""
 
@@ -48,17 +98,23 @@ class TMDBClient:
         Initialize TMDB client.
 
         Args:
-            api_key: TMDB API key. If not provided, reads from TMDB_API_KEY env var.
+            api_key: TMDB API key. If not provided, attempts to load from env/.env.
             cache: Cache instance for storing lookups.
             language: Language for results (default: Spanish Mexico).
             interactive_callback: Callback for interactive selection.
                                   Receives (results, title) and returns selected index or None.
+
+        Raises:
+            TMDBError: If API key is not found
         """
-        self.api_key = api_key or os.environ.get("TMDB_API_KEY")
+        self.api_key = api_key or load_api_key()
         if not self.api_key:
-            raise ValueError(
-                "TMDB API key required. Set TMDB_API_KEY environment variable "
-                "or pass api_key parameter."
+            raise TMDBError(
+                "TMDB API key not found.\n"
+                "Set it using one of these methods:\n"
+                "  1. Environment variable: export TMDB_API_KEY=your_key\n"
+                "  2. Create a .env file with: TMDB_API_KEY=your_key\n"
+                "Get your free API key at: https://www.themoviedb.org/settings/api"
             )
         self.cache = cache or Cache()
         self.language = language
