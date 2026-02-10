@@ -21,6 +21,15 @@ from .formatter import (
 from .cache import Cache
 from .models import RenameResult, SubtitleFile
 
+# Global verbose flag
+VERBOSE = False
+
+
+def log_verbose(message: str) -> None:
+    """Print message if verbose mode is enabled."""
+    if VERBOSE:
+        print(f"  [DEBUG] {message}")
+
 
 def print_video_diff(old_name: str, new_name: str) -> None:
     """Print the video rename diff."""
@@ -202,36 +211,54 @@ def process_file(
     parsed = parse_filename(filepath)
     extension = filepath.suffix
 
+    log_verbose(f"Parsed: title='{parsed.title_guess}', type={parsed.media_type}, "
+                f"season={parsed.season}, episodes={parsed.episodes}")
+
     new_filename = None
 
     # Try TMDB lookup
     if tmdb_client:
         try:
             if parsed.media_type == "series":
+                log_verbose(f"Searching TMDB for series: '{parsed.title_guess}'")
                 series = tmdb_client.search_series(parsed.title_guess)
-                if series and parsed.season is not None:
-                    # Get episode details (only for single episodes when needed)
-                    episode_details = []
-                    if include_episode_title and len(parsed.episodes) == 1:
-                        for ep_num in parsed.episodes:
-                            ep = tmdb_client.get_episode_details(
-                                series.id, parsed.season, ep_num
-                            )
-                            if ep:
-                                episode_details.append(ep)
+                if series:
+                    log_verbose(f"TMDB found: id={series.id}, name='{series.name}', "
+                                f"original='{series.original_name}'")
+                    if parsed.season is not None:
+                        # Get episode details (only for single episodes when needed)
+                        episode_details = []
+                        if include_episode_title and len(parsed.episodes) == 1:
+                            for ep_num in parsed.episodes:
+                                log_verbose(f"Fetching episode S{parsed.season:02d}E{ep_num:02d}")
+                                ep = tmdb_client.get_episode_details(
+                                    series.id, parsed.season, ep_num
+                                )
+                                if ep:
+                                    log_verbose(f"Episode title: '{ep.name}'")
+                                    episode_details.append(ep)
+                                else:
+                                    log_verbose("Episode not found in TMDB")
 
-                    new_filename = format_series_name(
-                        series,
-                        parsed.season,
-                        parsed.episodes,
-                        episode_details if episode_details else None,
-                        extension,
-                        include_episode_title
-                    )
+                        new_filename = format_series_name(
+                            series,
+                            parsed.season,
+                            parsed.episodes,
+                            episode_details if episode_details else None,
+                            extension,
+                            include_episode_title
+                        )
+                else:
+                    log_verbose("TMDB search returned no results")
             else:  # movie
+                log_verbose(f"Searching TMDB for movie: '{parsed.title_guess}' year={parsed.year}")
                 movie = tmdb_client.search_movie(parsed.title_guess, parsed.year)
                 if movie:
+                    log_verbose(f"TMDB found: id={movie.id}, title='{movie.title}', "
+                                f"original='{movie.original_title}'")
                     new_filename = format_movie_name(movie, extension, keep_year)
+                else:
+                    log_verbose("TMDB search returned no results")
 
         except Exception as e:
             # Log error but continue with fallback
@@ -415,8 +442,17 @@ def main(args: list[str] | None = None) -> int:
         default=None,
         help="Directory for cache file (default: current directory)"
     )
+    parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Show detailed debug information"
+    )
 
     parsed_args = parser.parse_args(args)
+
+    # Set global verbose flag
+    global VERBOSE
+    VERBOSE = parsed_args.verbose
 
     # Validate path
     if not parsed_args.path.exists():
@@ -435,7 +471,8 @@ def main(args: list[str] | None = None) -> int:
             tmdb_client = TMDBClient(
                 cache=cache,
                 language=parsed_args.language,
-                interactive_callback=interactive_cb
+                interactive_callback=interactive_cb,
+                verbose=VERBOSE
             )
         except TMDBError as e:
             print(f"Error: {e}")

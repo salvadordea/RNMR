@@ -92,7 +92,8 @@ class TMDBClient:
         api_key: str | None = None,
         cache: Cache | None = None,
         language: str = "es-MX",
-        interactive_callback: Callable[[list[dict], str], int | None] | None = None
+        interactive_callback: Callable[[list[dict], str], int | None] | None = None,
+        verbose: bool = False
     ):
         """
         Initialize TMDB client.
@@ -103,6 +104,7 @@ class TMDBClient:
             language: Language for results (default: Spanish Mexico).
             interactive_callback: Callback for interactive selection.
                                   Receives (results, title) and returns selected index or None.
+            verbose: Enable verbose debug output.
 
         Raises:
             TMDBError: If API key is not found
@@ -119,7 +121,13 @@ class TMDBClient:
         self.cache = cache or Cache()
         self.language = language
         self.interactive_callback = interactive_callback
+        self.verbose = verbose
         self._last_request_time = 0.0
+
+    def _log(self, message: str) -> None:
+        """Print debug message if verbose mode is enabled."""
+        if self.verbose:
+            print(f"  [TMDB] {message}")
 
     def _rate_limit(self) -> None:
         """Apply rate limiting between requests."""
@@ -154,24 +162,36 @@ class TMDBClient:
             **(params or {})
         }
 
+        # Log the request (hide API key)
+        log_params = {k: v for k, v in all_params.items() if k != "api_key"}
+        self._log(f"GET {endpoint} params={log_params}")
+
         for attempt in range(retries):
             try:
                 response = requests.get(url, params=all_params, timeout=DEFAULT_TIMEOUT)
 
+                self._log(f"Response status: {response.status_code}")
+
                 if response.status_code == 429:  # Rate limited
                     retry_after = int(response.headers.get("Retry-After", 1))
+                    self._log(f"Rate limited, waiting {retry_after}s")
                     time.sleep(retry_after)
                     continue
 
                 response.raise_for_status()
-                return response.json()
+                data = response.json()
+                if "results" in data:
+                    self._log(f"Found {len(data['results'])} results")
+                return data
 
             except requests.exceptions.Timeout:
+                self._log(f"Timeout (attempt {attempt + 1}/{retries})")
                 if attempt < retries - 1:
                     time.sleep(1)
                     continue
                 return None
-            except requests.exceptions.RequestException:
+            except requests.exceptions.RequestException as e:
+                self._log(f"Request error: {e} (attempt {attempt + 1}/{retries})")
                 if attempt < retries - 1:
                     time.sleep(1)
                     continue
