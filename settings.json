@@ -1,0 +1,6 @@
+{
+  "series_template": "{title} - S{season:02d}E{episode:02d} - {episode_title}",
+  "movie_template": "{title} ({year})",
+  "series_preset": "Standard",
+  "movie_preset": "Standard"
+}
