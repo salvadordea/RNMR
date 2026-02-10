@@ -31,12 +31,10 @@ NOISE_PATTERNS = [
 EPISODE_PATTERNS = [
     # S01E04E05 (multi-episode)
     r'[sS](\d{1,2})[eE](\d{1,2})(?:[eE](\d{1,2}))+',
-    # S01E04
+    # S01E04 / S1E4
     r'[sS](\d{1,2})[eE](\d{1,2})',
-    # S1E4
-    r'[sS](\d{1,2})[eE](\d{1,2})',
-    # 1x04
-    r'(\d{1,2})x(\d{2})',
+    # 1x04, 1x4, 01x05 (supports 1-2 digits for both season and episode)
+    r'\b(\d{1,2})x(\d{1,2})\b',
     # Season 1 Episode 4
     r'[sS]eason\s*(\d{1,2})\s*[eE]pisode\s*(\d{1,2})',
 ]
