@@ -88,7 +88,9 @@ def extract_episodes(name: str) -> tuple[int | None, list[int], str]:
         # Extract all episode numbers
         full_match = match.group(0)
         episodes = [int(ep) for ep in re.findall(r'[eE](\d{1,2})', full_match)]
-        remaining = name[:match.start()] + name[match.end():]
+        # Keep only text before the episode pattern; content after is
+        # episode title or quality tags, not part of the series title.
+        remaining = name[:match.start()]
         return season, episodes, remaining.strip()
 
     # Try standard patterns
@@ -97,7 +99,7 @@ def extract_episodes(name: str) -> tuple[int | None, list[int], str]:
         if match:
             season = int(match.group(1))
             episode = int(match.group(2))
-            remaining = name[:match.start()] + name[match.end():]
+            remaining = name[:match.start()]
             return season, [episode], remaining.strip()
 
     return None, [], name

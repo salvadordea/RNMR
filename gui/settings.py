@@ -1,16 +1,38 @@
 """Settings management for RNMR GUI."""
 import json
+import os
+import sys
 from pathlib import Path
 from typing import Any
 
-# Settings file location
-SETTINGS_FILE = Path(__file__).parent.parent / "settings.json"
 
-# Default templates
+# ---------------------------------------------------------------------------
+# Platform-appropriate settings directory
+# ---------------------------------------------------------------------------
+
+def _settings_dir() -> Path:
+    """Return the platform settings directory, creating it if needed."""
+    if sys.platform == "win32":
+        base = Path(os.environ.get("APPDATA", Path.home()))
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    else:
+        base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    d = base / "RNMR"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+SETTINGS_FILE = _settings_dir() / "settings.json"
+
+
+# ---------------------------------------------------------------------------
+# Template presets (unchanged -- consumed by the dialog)
+# ---------------------------------------------------------------------------
+
 DEFAULT_SERIES_TEMPLATE = "{title} - S{season:02d}E{episode:02d} - {episode_title}"
 DEFAULT_MOVIE_TEMPLATE = "{title} ({year})"
 
-# Template presets for series
 SERIES_PRESETS = {
     "Standard": "{title} - S{season:02d}E{episode:02d} - {episode_title}",
     "Without Episode Title": "{title} - S{season:02d}E{episode:02d}",
@@ -21,7 +43,6 @@ SERIES_PRESETS = {
     "Custom": "",
 }
 
-# Template presets for movies
 MOVIE_PRESETS = {
     "Standard": "{title} ({year})",
     "Title Only": "{title}",
@@ -30,7 +51,6 @@ MOVIE_PRESETS = {
     "Custom": "",
 }
 
-# Available template variables
 TEMPLATE_VARIABLES = {
     "series": [
         ("{title}", "Series title from TMDB"),
@@ -49,68 +69,117 @@ TEMPLATE_VARIABLES = {
     ],
 }
 
-# Default settings
-DEFAULT_SETTINGS = {
+
+# ---------------------------------------------------------------------------
+# Default values for every known key
+# ---------------------------------------------------------------------------
+
+DEFAULT_SETTINGS: dict[str, Any] = {
+    # Naming templates
     "series_template": DEFAULT_SERIES_TEMPLATE,
     "movie_template": DEFAULT_MOVIE_TEMPLATE,
     "series_preset": "Standard",
     "movie_preset": "Standard",
+
+    # TMDB
+    "tmdb_api_key": "",
+    "tmdb_language": "en-US",
+
+    # Behavior
+    "ask_before_overwrite": True,
+    "interactive_fallback": True,
+
+    # State (not shown in settings dialog)
+    "last_folder": "",
 }
 
 
-def load_settings() -> dict[str, Any]:
-    """
-    Load settings from settings.json.
+# ---------------------------------------------------------------------------
+# SettingsManager -- single authority for reading / writing settings
+# ---------------------------------------------------------------------------
 
-    Returns:
-        Settings dictionary with defaults for missing keys.
-    """
-    settings = DEFAULT_SETTINGS.copy()
+class SettingsManager:
+    """Centralised settings store backed by a JSON file.
 
-    if SETTINGS_FILE.exists():
+    Usage:
+        mgr = SettingsManager()
+        key = mgr.get("tmdb_api_key")
+        mgr.set("tmdb_api_key", "abc123")
+        mgr.save()
+    """
+
+    _instance: "SettingsManager | None" = None
+
+    def __new__(cls) -> "SettingsManager":
+        """Singleton -- one instance per process."""
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._data = cls._instance._load()
+        return cls._instance
+
+    # -- public API -------------------------------------------------------
+
+    def get(self, key: str, default: Any = None) -> Any:
+        fallback = DEFAULT_SETTINGS.get(key, default)
+        return self._data.get(key, fallback)
+
+    def set(self, key: str, value: Any) -> None:
+        self._data[key] = value
+
+    def save(self) -> bool:
         try:
-            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
-                saved = json.load(f)
-                settings.update(saved)
-        except (json.JSONDecodeError, IOError):
-            pass
+            with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+                json.dump(self._data, f, indent=2, ensure_ascii=False)
+            return True
+        except IOError:
+            return False
 
-    return settings
+    def all(self) -> dict[str, Any]:
+        """Return a merged view: defaults + saved values."""
+        merged = DEFAULT_SETTINGS.copy()
+        merged.update(self._data)
+        return merged
+
+    def reload(self) -> None:
+        self._data = self._load()
+
+    # -- private ----------------------------------------------------------
+
+    @staticmethod
+    def _load() -> dict[str, Any]:
+        if SETTINGS_FILE.exists():
+            try:
+                with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, IOError):
+                pass
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatible free functions (thin wrappers around SettingsManager)
+# ---------------------------------------------------------------------------
+
+def load_settings() -> dict[str, Any]:
+    """Load settings. Returns a dict with defaults for missing keys."""
+    return SettingsManager().all()
 
 
 def save_settings(settings: dict[str, Any]) -> bool:
-    """
-    Save settings to settings.json.
+    """Persist *settings* dict to disk."""
+    mgr = SettingsManager()
+    for k, v in settings.items():
+        mgr.set(k, v)
+    return mgr.save()
 
-    Args:
-        settings: Settings dictionary to save.
 
-    Returns:
-        True if saved successfully, False otherwise.
-    """
-    try:
-        with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(settings, f, indent=2, ensure_ascii=False)
-        return True
-    except IOError:
-        return False
-
+# ---------------------------------------------------------------------------
+# Template helpers (unchanged)
+# ---------------------------------------------------------------------------
 
 def validate_template(template: str, template_type: str = "series") -> tuple[bool, str]:
-    """
-    Validate a template string.
-
-    Args:
-        template: The template to validate.
-        template_type: "series" or "movie"
-
-    Returns:
-        Tuple of (is_valid, error_message)
-    """
     if not template or not template.strip():
         return False, "Template cannot be empty"
-
-    # Try to format with sample data
     try:
         sample = get_sample_data(template_type)
         result = render_template(template, sample)
@@ -126,7 +195,6 @@ def validate_template(template: str, template_type: str = "series") -> tuple[boo
 
 
 def get_sample_data(template_type: str = "series") -> dict[str, Any]:
-    """Get sample data for template preview."""
     if template_type == "series":
         return {
             "title": "The Night Manager",
@@ -137,39 +205,30 @@ def get_sample_data(template_type: str = "series") -> dict[str, Any]:
             "episodes": "05",
             "ext": ".mkv",
         }
-    else:
-        return {
-            "title": "The Matrix",
-            "year": 1999,
-            "original_title": "The Matrix",
-            "ext": ".mkv",
-        }
+    return {
+        "title": "The Matrix",
+        "year": 1999,
+        "original_title": "The Matrix",
+        "ext": ".mkv",
+    }
 
 
 def render_template(template: str, data: dict[str, Any]) -> str:
-    """
-    Render a template with given data.
+    import re as _re
 
-    Args:
-        template: The template string.
-        data: Data dictionary.
-
-    Returns:
-        Rendered string.
-    """
-    # Handle format specifiers manually for flexibility
     result = template
-
     for key, value in data.items():
-        # Handle zero-padded formats like {season:02d}
-        result = result.replace(f"{{{key}:02d}}", f"{value:02d}" if isinstance(value, int) else str(value))
-        result = result.replace(f"{{{key}:02}}", f"{value:02d}" if isinstance(value, int) else str(value))
-        # Handle plain replacement
+        result = result.replace(
+            f"{{{key}:02d}}",
+            f"{value:02d}" if isinstance(value, int) else str(value),
+        )
+        result = result.replace(
+            f"{{{key}:02}}",
+            f"{value:02d}" if isinstance(value, int) else str(value),
+        )
         result = result.replace(f"{{{key}}}", str(value))
 
-    # Check for any remaining unreplaced variables
-    import re
-    remaining = re.findall(r'\{(\w+)(?::[^}]*)?\}', result)
+    remaining = _re.findall(r'\{(\w+)(?::[^}]*)?\}', result)
     if remaining:
         raise KeyError(remaining[0])
 

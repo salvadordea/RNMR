@@ -12,6 +12,7 @@ A CLI tool for renaming media files (movies and TV series) using TMDB metadata.
 - Local caching to minimize API calls
 - Smart title matching using similarity scoring
 - Interactive mode for ambiguous matches
+- **Manual TMDB ID disambiguation** - set specific IDs for problematic files
 - Dry-run mode for safe previewing
 - Confirmation prompt before renaming
 - File limit for batch processing
@@ -217,6 +218,27 @@ The tool creates a `.renamer_cache.json` file to store TMDB lookups:
 
 This avoids repeated API calls for the same content.
 
+## Manual ID Disambiguation
+
+When automatic TMDB matching fails or returns the wrong result, you can manually set the TMDB ID:
+
+### GUI
+Right-click on any file in the table and select "Set TMDB ID..." to open the disambiguation dialog. Supported formats:
+- TMDB ID: `12345`
+- With type: `tv:12345` or `movie:12345`
+- TMDB URL: `https://themoviedb.org/tv/12345`
+
+The ID will be verified against TMDB before saving. Manual mappings are stored in `.rnmr_ids.json` in the scanned folder.
+
+### How It Works
+1. Right-click a file that was incorrectly matched
+2. Enter the correct TMDB ID (find it on themoviedb.org)
+3. Click "Verify ID" to confirm
+4. Click "Save" to store the mapping
+5. Rescan to apply the correct metadata
+
+Manual IDs take priority over automatic TMDB search results.
+
 ## Safety Features
 
 - **No overwrites**: Skips if destination file exists
@@ -234,6 +256,16 @@ renamer/
   formatter.py   # Output formatting
   cache.py       # Local JSON cache
   models.py      # Data classes
+  id_mapping.py  # Manual TMDB ID disambiguation
+
+gui/
+  main.py        # GUI entry point
+  main_window.py # Main application window
+  worker.py      # Background workers for scanning/renaming
+  theme.py       # Dark theme stylesheet
+  settings.py    # Settings persistence
+  settings_dialog.py  # Template settings dialog
+  id_dialog.py   # TMDB ID disambiguation dialog
 ```
 
 ## License

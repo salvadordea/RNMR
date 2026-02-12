@@ -2,56 +2,54 @@
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QPushButton, QLineEdit, QComboBox, QLabel,
-    QGroupBox, QTextEdit, QMessageBox, QTabWidget, QWidget
+    QGroupBox, QTextEdit, QMessageBox, QTabWidget,
+    QWidget, QCheckBox
 )
 from PySide6.QtCore import Qt, Signal
 
 from .settings import (
-    load_settings, save_settings, validate_template,
-    get_sample_data, render_template,
+    SettingsManager,
+    validate_template, get_sample_data, render_template,
     SERIES_PRESETS, MOVIE_PRESETS, TEMPLATE_VARIABLES,
-    DEFAULT_SERIES_TEMPLATE, DEFAULT_MOVIE_TEMPLATE
+    DEFAULT_SERIES_TEMPLATE, DEFAULT_MOVIE_TEMPLATE,
+    DEFAULT_SETTINGS,
 )
 from .theme import COLORS
 
 
 class SettingsDialog(QDialog):
-    """Dialog for configuring naming templates."""
+    """Application settings dialog with General / TMDB / Behavior sections."""
 
     settings_changed = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self.setWindowTitle("Naming Format Settings")
+        self.setWindowTitle("Settings")
         self.setMinimumWidth(550)
-        self.setMinimumHeight(500)
+        self.setMinimumHeight(520)
 
-        self.settings = load_settings()
+        self.mgr = SettingsManager()
 
         self._setup_ui()
         self._load_current_settings()
         self._update_previews()
 
+    # ------------------------------------------------------------------
+    # UI construction
+    # ------------------------------------------------------------------
+
     def _setup_ui(self):
-        """Setup the dialog UI."""
         layout = QVBoxLayout(self)
         layout.setSpacing(16)
 
-        # Tab widget for Series / Movies
         tabs = QTabWidget()
-
-        # Series tab
-        series_tab = self._create_series_tab()
-        tabs.addTab(series_tab, "Series")
-
-        # Movies tab
-        movie_tab = self._create_movie_tab()
-        tabs.addTab(movie_tab, "Movies")
-
+        tabs.addTab(self._create_general_tab(), "General")
+        tabs.addTab(self._create_tmdb_tab(), "TMDB")
+        tabs.addTab(self._create_behavior_tab(), "Behavior")
         layout.addWidget(tabs)
 
-        # Buttons
+        # Bottom buttons
         button_layout = QHBoxLayout()
         button_layout.addStretch()
 
@@ -71,199 +69,297 @@ class SettingsDialog(QDialog):
 
         layout.addLayout(button_layout)
 
-    def _create_series_tab(self) -> QWidget:
-        """Create the series settings tab."""
+    # -- General tab ---------------------------------------------------
+
+    def _create_general_tab(self) -> QWidget:
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setSpacing(12)
 
-        # Preset dropdown
-        preset_group = QGroupBox("Preset")
-        preset_layout = QFormLayout(preset_group)
+        # ---- Series section ----
+        series_group = QGroupBox("Series Naming")
+        series_layout = QVBoxLayout(series_group)
 
+        preset_form = QFormLayout()
         self.series_preset_combo = QComboBox()
         self.series_preset_combo.addItems(SERIES_PRESETS.keys())
-        self.series_preset_combo.currentTextChanged.connect(self._on_series_preset_changed)
-
-        preset_layout.addRow("Format:", self.series_preset_combo)
-        layout.addWidget(preset_group)
-
-        # Template editor
-        template_group = QGroupBox("Template")
-        template_layout = QVBoxLayout(template_group)
+        self.series_preset_combo.currentTextChanged.connect(
+            self._on_series_preset_changed
+        )
+        preset_form.addRow("Preset:", self.series_preset_combo)
+        series_layout.addLayout(preset_form)
 
         self.series_template_edit = QLineEdit()
         self.series_template_edit.setPlaceholderText("Enter custom template...")
         self.series_template_edit.textChanged.connect(self._update_series_preview)
+        series_layout.addWidget(self.series_template_edit)
 
-        template_layout.addWidget(self.series_template_edit)
-
-        # Validation label
         self.series_validation_label = QLabel("")
         self.series_validation_label.setWordWrap(True)
-        template_layout.addWidget(self.series_validation_label)
-
-        layout.addWidget(template_group)
-
-        # Preview
-        preview_group = QGroupBox("Preview")
-        preview_layout = QVBoxLayout(preview_group)
+        series_layout.addWidget(self.series_validation_label)
 
         self.series_preview_label = QLabel("")
-        self.series_preview_label.setStyleSheet(f"color: {COLORS['accent']}; font-weight: 500;")
+        self.series_preview_label.setStyleSheet(
+            f"color: {COLORS['accent']}; font-weight: 500;"
+        )
         self.series_preview_label.setWordWrap(True)
+        series_layout.addWidget(self.series_preview_label)
 
-        preview_layout.addWidget(self.series_preview_label)
-        layout.addWidget(preview_group)
+        layout.addWidget(series_group)
 
-        # Variables help
-        help_group = QGroupBox("Available Variables")
-        help_layout = QVBoxLayout(help_group)
+        # ---- Movie section ----
+        movie_group = QGroupBox("Movie Naming")
+        movie_layout = QVBoxLayout(movie_group)
 
-        help_text = QTextEdit()
-        help_text.setReadOnly(True)
-        help_text.setMaximumHeight(120)
-
-        variables_html = "<table style='font-size: 12px;'>"
-        for var, desc in TEMPLATE_VARIABLES["series"]:
-            variables_html += f"<tr><td style='color: {COLORS['accent']};'><code>{var}</code></td>"
-            variables_html += f"<td style='color: {COLORS['text_muted']};'>{desc}</td></tr>"
-        variables_html += "</table>"
-
-        help_text.setHtml(variables_html)
-        help_layout.addWidget(help_text)
-        layout.addWidget(help_group)
-
-        layout.addStretch()
-
-        return widget
-
-    def _create_movie_tab(self) -> QWidget:
-        """Create the movie settings tab."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setSpacing(12)
-
-        # Preset dropdown
-        preset_group = QGroupBox("Preset")
-        preset_layout = QFormLayout(preset_group)
-
+        preset_form2 = QFormLayout()
         self.movie_preset_combo = QComboBox()
         self.movie_preset_combo.addItems(MOVIE_PRESETS.keys())
-        self.movie_preset_combo.currentTextChanged.connect(self._on_movie_preset_changed)
-
-        preset_layout.addRow("Format:", self.movie_preset_combo)
-        layout.addWidget(preset_group)
-
-        # Template editor
-        template_group = QGroupBox("Template")
-        template_layout = QVBoxLayout(template_group)
+        self.movie_preset_combo.currentTextChanged.connect(
+            self._on_movie_preset_changed
+        )
+        preset_form2.addRow("Preset:", self.movie_preset_combo)
+        movie_layout.addLayout(preset_form2)
 
         self.movie_template_edit = QLineEdit()
         self.movie_template_edit.setPlaceholderText("Enter custom template...")
         self.movie_template_edit.textChanged.connect(self._update_movie_preview)
+        movie_layout.addWidget(self.movie_template_edit)
 
-        template_layout.addWidget(self.movie_template_edit)
-
-        # Validation label
         self.movie_validation_label = QLabel("")
         self.movie_validation_label.setWordWrap(True)
-        template_layout.addWidget(self.movie_validation_label)
-
-        layout.addWidget(template_group)
-
-        # Preview
-        preview_group = QGroupBox("Preview")
-        preview_layout = QVBoxLayout(preview_group)
+        movie_layout.addWidget(self.movie_validation_label)
 
         self.movie_preview_label = QLabel("")
-        self.movie_preview_label.setStyleSheet(f"color: {COLORS['accent']}; font-weight: 500;")
+        self.movie_preview_label.setStyleSheet(
+            f"color: {COLORS['accent']}; font-weight: 500;"
+        )
         self.movie_preview_label.setWordWrap(True)
+        movie_layout.addWidget(self.movie_preview_label)
 
-        preview_layout.addWidget(self.movie_preview_label)
-        layout.addWidget(preview_group)
+        layout.addWidget(movie_group)
 
-        # Variables help
+        # ---- Template variables reference ----
         help_group = QGroupBox("Available Variables")
         help_layout = QVBoxLayout(help_group)
-
         help_text = QTextEdit()
         help_text.setReadOnly(True)
-        help_text.setMaximumHeight(100)
-
-        variables_html = "<table style='font-size: 12px;'>"
+        help_text.setMaximumHeight(110)
+        html = "<table>"
+        html += "<tr><td colspan='2' style='font-weight:600;'>Series</td></tr>"
+        for var, desc in TEMPLATE_VARIABLES["series"]:
+            html += (
+                f"<tr><td style='color:{COLORS['accent']};'>"
+                f"<code>{var}</code></td>"
+                f"<td style='color:{COLORS['text_muted']};'>{desc}</td></tr>"
+            )
+        html += "<tr><td colspan='2' style='font-weight:600;'>Movie</td></tr>"
         for var, desc in TEMPLATE_VARIABLES["movie"]:
-            variables_html += f"<tr><td style='color: {COLORS['accent']};'><code>{var}</code></td>"
-            variables_html += f"<td style='color: {COLORS['text_muted']};'>{desc}</td></tr>"
-        variables_html += "</table>"
-
-        help_text.setHtml(variables_html)
+            html += (
+                f"<tr><td style='color:{COLORS['accent']};'>"
+                f"<code>{var}</code></td>"
+                f"<td style='color:{COLORS['text_muted']};'>{desc}</td></tr>"
+            )
+        html += "</table>"
+        help_text.setHtml(html)
         help_layout.addWidget(help_text)
         layout.addWidget(help_group)
 
         layout.addStretch()
-
         return widget
 
-    def _load_current_settings(self):
-        """Load current settings into the UI."""
-        # Series
-        series_preset = self.settings.get("series_preset", "Standard")
-        series_template = self.settings.get("series_template", DEFAULT_SERIES_TEMPLATE)
+    # -- TMDB tab ------------------------------------------------------
 
-        idx = self.series_preset_combo.findText(series_preset)
+    def _create_tmdb_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setSpacing(12)
+
+        group = QGroupBox("TMDB Configuration")
+        form = QFormLayout(group)
+        form.setSpacing(12)
+
+        self.api_key_edit = QLineEdit()
+        self.api_key_edit.setPlaceholderText("Enter your TMDB API key...")
+        self.api_key_edit.setEchoMode(QLineEdit.Password)
+        form.addRow("API Key:", self.api_key_edit)
+
+        # Toggle visibility
+        show_btn = QPushButton("Show")
+        show_btn.setCheckable(True)
+        show_btn.toggled.connect(
+            lambda checked: self.api_key_edit.setEchoMode(
+                QLineEdit.Normal if checked else QLineEdit.Password
+            )
+        )
+        show_btn.toggled.connect(
+            lambda checked: show_btn.setText("Hide" if checked else "Show")
+        )
+        form.addRow("", show_btn)
+
+        self.language_edit = QLineEdit()
+        self.language_edit.setPlaceholderText("en-US")
+        form.addRow("Language:", self.language_edit)
+
+        layout.addWidget(group)
+
+        help_label = QLabel(
+            "Get a free API key at "
+            "<a href='https://www.themoviedb.org/settings/api' "
+            "style='color:" + COLORS["accent"] + ";'>"
+            "themoviedb.org/settings/api</a>.<br>"
+            "If left blank, the TMDB_API_KEY environment variable is used."
+        )
+        help_label.setOpenExternalLinks(True)
+        help_label.setWordWrap(True)
+        help_label.setStyleSheet(f"color: {COLORS['text_muted']};")
+        layout.addWidget(help_label)
+
+        layout.addStretch()
+        return widget
+
+    # -- Behavior tab --------------------------------------------------
+
+    def _create_behavior_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setSpacing(12)
+
+        group = QGroupBox("Rename Behavior")
+        form = QVBoxLayout(group)
+        form.setSpacing(14)
+
+        self.overwrite_cb = QCheckBox("Ask before overwriting files")
+        self.overwrite_cb.setToolTip(
+            "Show a confirmation dialog when a destination file already exists."
+        )
+        form.addWidget(self.overwrite_cb)
+
+        self.interactive_cb = QCheckBox("Enable manual search fallback")
+        self.interactive_cb.setToolTip(
+            "When automatic TMDB detection fails, show a search dialog "
+            "so you can find the correct title manually."
+        )
+        form.addWidget(self.interactive_cb)
+
+        layout.addWidget(group)
+        layout.addStretch()
+        return widget
+
+    # ------------------------------------------------------------------
+    # Load / save
+    # ------------------------------------------------------------------
+
+    def _load_current_settings(self):
+        # General - series
+        idx = self.series_preset_combo.findText(
+            self.mgr.get("series_preset", "Standard")
+        )
         if idx >= 0:
             self.series_preset_combo.setCurrentIndex(idx)
+        self.series_template_edit.setText(
+            self.mgr.get("series_template", DEFAULT_SERIES_TEMPLATE)
+        )
 
-        self.series_template_edit.setText(series_template)
-
-        # Movies
-        movie_preset = self.settings.get("movie_preset", "Standard")
-        movie_template = self.settings.get("movie_template", DEFAULT_MOVIE_TEMPLATE)
-
-        idx = self.movie_preset_combo.findText(movie_preset)
+        # General - movie
+        idx = self.movie_preset_combo.findText(
+            self.mgr.get("movie_preset", "Standard")
+        )
         if idx >= 0:
             self.movie_preset_combo.setCurrentIndex(idx)
+        self.movie_template_edit.setText(
+            self.mgr.get("movie_template", DEFAULT_MOVIE_TEMPLATE)
+        )
 
-        self.movie_template_edit.setText(movie_template)
+        # TMDB
+        self.api_key_edit.setText(self.mgr.get("tmdb_api_key", ""))
+        self.language_edit.setText(self.mgr.get("tmdb_language", "en-US"))
+
+        # Behavior
+        self.overwrite_cb.setChecked(self.mgr.get("ask_before_overwrite", True))
+        self.interactive_cb.setChecked(self.mgr.get("interactive_fallback", True))
+
+    def _save_and_close(self):
+        series_template = self.series_template_edit.text()
+        movie_template = self.movie_template_edit.text()
+
+        ok, err = validate_template(series_template, "series")
+        if not ok:
+            QMessageBox.warning(
+                self, "Invalid Series Template",
+                f"The series template is invalid:\n{err}",
+            )
+            return
+
+        ok, err = validate_template(movie_template, "movie")
+        if not ok:
+            QMessageBox.warning(
+                self, "Invalid Movie Template",
+                f"The movie template is invalid:\n{err}",
+            )
+            return
+
+        # Persist everything through SettingsManager
+        self.mgr.set("series_template", series_template)
+        self.mgr.set("movie_template", movie_template)
+        self.mgr.set("series_preset", self.series_preset_combo.currentText())
+        self.mgr.set("movie_preset", self.movie_preset_combo.currentText())
+        self.mgr.set("tmdb_api_key", self.api_key_edit.text().strip())
+        self.mgr.set("tmdb_language", self.language_edit.text().strip() or "en-US")
+        self.mgr.set("ask_before_overwrite", self.overwrite_cb.isChecked())
+        self.mgr.set("interactive_fallback", self.interactive_cb.isChecked())
+
+        if self.mgr.save():
+            self.settings_changed.emit()
+            self.accept()
+        else:
+            QMessageBox.warning(
+                self, "Save Error", "Could not save settings to file."
+            )
+
+    def _reset_defaults(self):
+        self.series_preset_combo.setCurrentText("Standard")
+        self.series_template_edit.setText(DEFAULT_SERIES_TEMPLATE)
+        self.movie_preset_combo.setCurrentText("Standard")
+        self.movie_template_edit.setText(DEFAULT_MOVIE_TEMPLATE)
+        self.api_key_edit.setText("")
+        self.language_edit.setText("en-US")
+        self.overwrite_cb.setChecked(True)
+        self.interactive_cb.setChecked(True)
+        self._update_previews()
+
+    # ------------------------------------------------------------------
+    # Preset / preview helpers
+    # ------------------------------------------------------------------
 
     def _on_series_preset_changed(self, preset: str):
-        """Handle series preset selection."""
         template = SERIES_PRESETS.get(preset, "")
         if template:
             self.series_template_edit.setText(template)
         self._update_series_preview()
 
     def _on_movie_preset_changed(self, preset: str):
-        """Handle movie preset selection."""
         template = MOVIE_PRESETS.get(preset, "")
         if template:
             self.movie_template_edit.setText(template)
         self._update_movie_preview()
 
     def _update_previews(self):
-        """Update both preview labels."""
         self._update_series_preview()
         self._update_movie_preview()
 
     def _update_series_preview(self):
-        """Update series preview label."""
         template = self.series_template_edit.text()
-
         if not template:
             self.series_preview_label.setText("(empty template)")
             self.series_validation_label.setText("")
             return
 
-        is_valid, error = validate_template(template, "series")
-
-        if is_valid:
+        ok, err = validate_template(template, "series")
+        if ok:
             try:
                 sample = get_sample_data("series")
-                # Handle empty episode title gracefully
                 if "{episode_title}" in template and not sample.get("episode_title"):
                     sample["episode_title"] = "Episode Name"
-
                 preview = render_template(template, sample)
                 self.series_preview_label.setText(f"{preview}.mkv")
                 self.series_validation_label.setText("")
@@ -271,24 +367,25 @@ class SettingsDialog(QDialog):
             except Exception as e:
                 self.series_preview_label.setText("(error)")
                 self.series_validation_label.setText(str(e))
-                self.series_validation_label.setStyleSheet(f"color: {COLORS['error']};")
+                self.series_validation_label.setStyleSheet(
+                    f"color: {COLORS['error']};"
+                )
         else:
             self.series_preview_label.setText("(invalid)")
-            self.series_validation_label.setText(error)
-            self.series_validation_label.setStyleSheet(f"color: {COLORS['error']};")
+            self.series_validation_label.setText(err)
+            self.series_validation_label.setStyleSheet(
+                f"color: {COLORS['error']};"
+            )
 
     def _update_movie_preview(self):
-        """Update movie preview label."""
         template = self.movie_template_edit.text()
-
         if not template:
             self.movie_preview_label.setText("(empty template)")
             self.movie_validation_label.setText("")
             return
 
-        is_valid, error = validate_template(template, "movie")
-
-        if is_valid:
+        ok, err = validate_template(template, "movie")
+        if ok:
             try:
                 sample = get_sample_data("movie")
                 preview = render_template(template, sample)
@@ -298,58 +395,12 @@ class SettingsDialog(QDialog):
             except Exception as e:
                 self.movie_preview_label.setText("(error)")
                 self.movie_validation_label.setText(str(e))
-                self.movie_validation_label.setStyleSheet(f"color: {COLORS['error']};")
+                self.movie_validation_label.setStyleSheet(
+                    f"color: {COLORS['error']};"
+                )
         else:
             self.movie_preview_label.setText("(invalid)")
-            self.movie_validation_label.setText(error)
-            self.movie_validation_label.setStyleSheet(f"color: {COLORS['error']};")
-
-    def _reset_defaults(self):
-        """Reset to default templates."""
-        self.series_preset_combo.setCurrentText("Standard")
-        self.series_template_edit.setText(DEFAULT_SERIES_TEMPLATE)
-
-        self.movie_preset_combo.setCurrentText("Standard")
-        self.movie_template_edit.setText(DEFAULT_MOVIE_TEMPLATE)
-
-        self._update_previews()
-
-    def _save_and_close(self):
-        """Validate, save settings and close."""
-        series_template = self.series_template_edit.text()
-        movie_template = self.movie_template_edit.text()
-
-        # Validate
-        is_valid, error = validate_template(series_template, "series")
-        if not is_valid:
-            QMessageBox.warning(
-                self,
-                "Invalid Series Template",
-                f"The series template is invalid:\n{error}"
-            )
-            return
-
-        is_valid, error = validate_template(movie_template, "movie")
-        if not is_valid:
-            QMessageBox.warning(
-                self,
-                "Invalid Movie Template",
-                f"The movie template is invalid:\n{error}"
-            )
-            return
-
-        # Save
-        self.settings["series_template"] = series_template
-        self.settings["movie_template"] = movie_template
-        self.settings["series_preset"] = self.series_preset_combo.currentText()
-        self.settings["movie_preset"] = self.movie_preset_combo.currentText()
-
-        if save_settings(self.settings):
-            self.settings_changed.emit()
-            self.accept()
-        else:
-            QMessageBox.warning(
-                self,
-                "Save Error",
-                "Could not save settings to file."
+            self.movie_validation_label.setText(err)
+            self.movie_validation_label.setStyleSheet(
+                f"color: {COLORS['error']};"
             )

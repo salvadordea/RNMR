@@ -93,7 +93,8 @@ class TMDBClient:
         api_key: str | None = None,
         cache: Cache | None = None,
         interactive_callback: Callable[[list[dict], str], int | None] | None = None,
-        verbose: bool = False
+        verbose: bool = False,
+        language: str | None = None
     ):
         """
         Initialize TMDB client.
@@ -104,6 +105,8 @@ class TMDBClient:
             interactive_callback: Callback for interactive selection.
                                   Receives (results, title) and returns selected index or None.
             verbose: Enable verbose debug output.
+            language: TMDB API language tag (e.g. "en-US"). Falls back to
+                      DEFAULT_LANGUAGE when *None*.
 
         Raises:
             TMDBError: If API key is not found
@@ -120,8 +123,9 @@ class TMDBClient:
         self.cache = cache or Cache()
         self.interactive_callback = interactive_callback
         self.verbose = verbose
+        self.language = language or DEFAULT_LANGUAGE
         self._last_request_time = 0.0
-        self._log(f"Using TMDB language: {DEFAULT_LANGUAGE}")
+        self._log(f"Using TMDB language: {self.language}")
 
     def _log(self, message: str) -> None:
         """Print debug message if verbose mode is enabled."""
@@ -157,7 +161,7 @@ class TMDBClient:
         url = f"{TMDB_BASE_URL}{endpoint}"
         all_params = {
             "api_key": self.api_key,
-            "language": DEFAULT_LANGUAGE,
+            "language": self.language,
             **(params or {})
         }
 
@@ -204,7 +208,7 @@ class TMDBClient:
         title: str,
         year: int | None = None,
         is_movie: bool = True
-    ) -> dict | None:
+    ) -> tuple[dict | None, float]:
         """
         Choose the best match from search results.
 
@@ -215,16 +219,19 @@ class TMDBClient:
             is_movie: Whether we're searching for movies
 
         Returns:
-            Best matching result or None
+            (best_result, confidence) where *confidence* is 0.0-1.0
+            indicating how certain the match is.
         """
         if not results:
-            return None
+            return None, 0.0
 
         # If interactive mode and callback is set
         if self.interactive_callback and len(results) > 1:
             selected = self.interactive_callback(results, title)
             if selected is not None and 0 <= selected < len(results):
-                return results[selected]
+                return results[selected], 1.0
+
+        title_norm = normalize_for_comparison(title)
 
         # Score each result
         scored = []
@@ -236,32 +243,60 @@ class TMDBClient:
             result_title = result.get(title_field, "")
             original_title = result.get(original_title_field, "")
 
+            result_title_norm = normalize_for_comparison(result_title)
+            original_title_norm = normalize_for_comparison(original_title)
+
             # Calculate title similarity (use best of localized and original)
             title_sim = max(
                 similarity_score(title, result_title),
                 similarity_score(title, original_title)
             )
 
+            # Exact title match bonus
+            exact_match = (
+                title_norm == result_title_norm
+                or title_norm == original_title_norm
+            )
+            exact_bonus = 0.3 if exact_match else 0.0
+
             # Year bonus
             year_bonus = 0.0
+            year_matched = False
             if year:
                 result_date = result.get(date_field, "")
                 if result_date and len(result_date) >= 4:
-                    result_year = int(result_date[:4])
-                    if result_year == year:
-                        year_bonus = 0.2
-                    elif abs(result_year - year) == 1:
-                        year_bonus = 0.1
+                    try:
+                        result_year = int(result_date[:4])
+                        if result_year == year:
+                            year_bonus = 0.25
+                            year_matched = True
+                        elif abs(result_year - year) == 1:
+                            year_bonus = 0.1
+                    except ValueError:
+                        pass
 
-            # Popularity as tiebreaker
-            popularity = result.get("popularity", 0) / 1000  # Normalize
+            # Popularity as tiebreaker (not part of confidence)
+            popularity = result.get("popularity", 0)
+            pop_bonus = min(popularity / 1000, 1.0) * 0.05
 
-            score = title_sim + year_bonus + (popularity * 0.05)
-            scored.append((score, result))
+            # Total score for ranking
+            score = title_sim + exact_bonus + year_bonus + pop_bonus
+
+            # Confidence for this candidate (popularity excluded --
+            # it helps ranking but not certainty)
+            conf = 1.0 if exact_match else title_sim
+            if year_matched:
+                conf = min(1.0, conf + 0.1)
+
+            scored.append((score, conf, result))
 
         # Sort by score descending
         scored.sort(key=lambda x: x[0], reverse=True)
-        return scored[0][1] if scored else None
+
+        if not scored:
+            return None, 0.0
+
+        return scored[0][2], scored[0][1]
 
     def search_movie(self, title: str, year: int | None = None) -> TMDBMovie | None:
         """
@@ -295,7 +330,9 @@ class TMDBClient:
             return None
 
         # Choose best match
-        best = self._choose_best_match(data["results"], title, year, is_movie=True)
+        best, confidence = self._choose_best_match(
+            data["results"], title, year, is_movie=True
+        )
         if not best:
             return None
 
@@ -309,7 +346,8 @@ class TMDBClient:
             title=best.get("title", ""),
             original_title=best.get("original_title", ""),
             year=release_year,
-            overview=best.get("overview", "")
+            overview=best.get("overview", ""),
+            confidence=confidence
         )
 
         # Cache result
@@ -352,7 +390,9 @@ class TMDBClient:
             return None
 
         # Choose best match
-        best = self._choose_best_match(data["results"], title, is_movie=False)
+        best, confidence = self._choose_best_match(
+            data["results"], title, is_movie=False
+        )
         if not best:
             return None
 
@@ -366,7 +406,8 @@ class TMDBClient:
             name=best.get("name", ""),
             original_name=best.get("original_name", ""),
             first_air_year=first_air_year,
-            overview=best.get("overview", "")
+            overview=best.get("overview", ""),
+            confidence=confidence
         )
 
         # Cache result

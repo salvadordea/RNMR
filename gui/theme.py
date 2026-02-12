@@ -29,7 +29,7 @@ QWidget {{
     background-color: {COLORS["background"]};
     color: {COLORS["text"]};
     font-family: "Segoe UI", "SF Pro Display", "Arial", sans-serif;
-    font-size: 13pt;
+    font-size: 10pt;
 }}
 
 /* Group Boxes */
@@ -252,7 +252,7 @@ QTextEdit {{
     border-radius: 8px;
     padding: 8px;
     font-family: "Cascadia Code", "Consolas", "Courier New", monospace;
-    font-size: 12pt;
+    font-size: 9pt;
 }}
 
 /* Tool Button (Collapse) */
@@ -278,6 +278,76 @@ QLabel#mutedLabel {{
 
 QLabel#statusLabel {{
     font-weight: 500;
+}}
+
+/* Combo Box */
+QComboBox {{
+    background-color: {COLORS["panel"]};
+    color: {COLORS["text"]};
+    border: 1px solid {COLORS["border"]};
+    border-radius: 6px;
+    padding: 6px 10px;
+    min-height: 20px;
+}}
+
+QComboBox:hover {{
+    border-color: {COLORS["accent"]};
+}}
+
+QComboBox::drop-down {{
+    border: none;
+    width: 24px;
+}}
+
+QComboBox QAbstractItemView {{
+    background-color: {COLORS["panel"]};
+    color: {COLORS["text"]};
+    border: 1px solid {COLORS["border"]};
+    selection-background-color: {COLORS["selection"]};
+    outline: none;
+}}
+
+/* Spin Box */
+QSpinBox {{
+    background-color: {COLORS["panel"]};
+    color: {COLORS["text"]};
+    border: 1px solid {COLORS["border"]};
+    border-radius: 6px;
+    padding: 6px 10px;
+    min-height: 20px;
+}}
+
+QSpinBox:focus {{
+    border-color: {COLORS["accent"]};
+}}
+
+/* Tab Widget */
+QTabWidget::pane {{
+    border: 1px solid {COLORS["border"]};
+    border-radius: 6px;
+    background-color: {COLORS["background"]};
+}}
+
+QTabBar::tab {{
+    background-color: {COLORS["panel"]};
+    color: {COLORS["text_muted"]};
+    border: 1px solid {COLORS["border"]};
+    border-bottom: none;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    padding: 8px 18px;
+    margin-right: 2px;
+}}
+
+QTabBar::tab:selected {{
+    background-color: {COLORS["background"]};
+    color: {COLORS["text"]};
+    border-bottom: 2px solid {COLORS["accent"]};
+}}
+
+QTabBar::tab:hover:!selected {{
+    background-color: {COLORS["panel_light"]};
+    color: {COLORS["text"]};
 }}
 
 /* Dialog */

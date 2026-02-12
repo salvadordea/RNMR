@@ -22,6 +22,7 @@ class TMDBMovie:
     original_title: str
     year: int | None
     overview: str = ""
+    confidence: float = 1.0
 
 
 @dataclass
@@ -32,6 +33,7 @@ class TMDBSeries:
     original_name: str
     first_air_year: int | None
     overview: str = ""
+    confidence: float = 1.0
 
 
 @dataclass
