@@ -2,9 +2,12 @@
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QApplication,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices
 
 from .theme import COLORS
+
+BMAC_URL = "https://buymeacoffee.com/rnmr"
 
 USDT_ADDRESS = "TKy1aQvUbmFqVnvAgiVSE9X1g3QYogWkH9"
 
@@ -42,6 +45,28 @@ class SupportDialog(QDialog):
         desc.setAlignment(Qt.AlignCenter)
         desc.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 10pt;")
         layout.addWidget(desc)
+
+        # Buy Me a Coffee section
+        bmac_label = QLabel("BUY ME A COFFEE")
+        bmac_label.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 9pt;"
+            "font-weight: bold; letter-spacing: 1px;"
+        )
+        layout.addWidget(bmac_label)
+
+        bmac_btn = QPushButton("buymeacoffee.com/rnmr")
+        bmac_btn.setStyleSheet(
+            "background-color: #FFDD00; color: #000; font-weight: 600;"
+            "border: none; border-radius: 6px; padding: 10px 16px;"
+            "font-size: 10pt;"
+        )
+        bmac_btn.setCursor(Qt.PointingHandCursor)
+        bmac_btn.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl(BMAC_URL))
+        )
+        layout.addWidget(bmac_btn)
+
+        layout.addSpacing(8)
 
         # Crypto section
         network_label = QLabel("USDT -- TRC20 Network")

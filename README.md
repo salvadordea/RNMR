@@ -339,7 +339,11 @@ gui/
 
 ## Support RNMR
 
-If you find RNMR useful and would like to support its development, you can send a contribution via crypto.
+If you find RNMR useful and would like to support its development:
+
+**Buy Me a Coffee**
+
+[buymeacoffee.com/rnmr](https://buymeacoffee.com/rnmr)
 
 **USDT (TRC20 Network)**
 
