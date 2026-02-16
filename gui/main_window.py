@@ -23,6 +23,7 @@ from .tmdb_select_dialog import TMDBSelectDialog, SKIP as SEL_SKIP, SKIP_ALL as 
 from renamer.id_mapping import IDMapping
 from renamer.history import RenameHistoryManager
 from .setup_wizard import SetupWizard
+from .support_dialog import SupportDialog
 
 
 class MetadataDialog(QDialog):
@@ -231,6 +232,12 @@ class MainWindow(QMainWindow):
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
 
+        help_menu.addSeparator()
+
+        support_action = QAction("Support RNMR...", self)
+        support_action.triggered.connect(self._show_support)
+        help_menu.addAction(support_action)
+
     def _show_settings(self):
         """Show the settings dialog."""
         dialog = SettingsDialog(self)
@@ -261,6 +268,11 @@ class MainWindow(QMainWindow):
             "<li>Manual TMDB ID disambiguation</li>"
             "</ul>"
         )
+
+    def _show_support(self):
+        """Show the support/donate dialog."""
+        dlg = SupportDialog(self)
+        dlg.exec()
 
     def _create_controls_group(self) -> QGroupBox:
         """Create the top controls group."""

@@ -337,6 +337,18 @@ gui/
   id_dialog.py            # TMDB ID disambiguation dialog
 ```
 
+## Support RNMR
+
+If you find RNMR useful and would like to support its development, you can send a contribution via crypto.
+
+**USDT (TRC20 Network)**
+
+```
+TKy1aQvUbmFqVnvAgiVSE9X1g3QYogWkH9
+```
+
+> Please make sure to use the **TRC20 network** when sending USDT. Crypto transactions are non-refundable.
+
 ## License
 
 MIT

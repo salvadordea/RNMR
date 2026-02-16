@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Support RNMR</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: "Segoe UI", "SF Pro Display", Arial, sans-serif;
+      background-color: #121212;
+      color: #EAEAEA;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      padding: 24px;
+    }
+    .card {
+      background-color: #1E1E1E;
+      border: 1px solid #2C2C2C;
+      border-radius: 12px;
+      padding: 40px;
+      max-width: 480px;
+      width: 100%;
+    }
+    h1 {
+      font-size: 22px;
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+    .accent { color: #3A82F7; }
+    p {
+      color: #9AA0A6;
+      font-size: 14px;
+      line-height: 1.6;
+      margin-bottom: 24px;
+    }
+    .method {
+      background-color: #252525;
+      border: 1px solid #2C2C2C;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+    .method-label {
+      font-size: 13px;
+      font-weight: 600;
+      color: #9AA0A6;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .address-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .address {
+      font-family: "Cascadia Code", "Consolas", "Courier New", monospace;
+      font-size: 13px;
+      color: #EAEAEA;
+      background-color: #1E1E1E;
+      border: 1px solid #2C2C2C;
+      border-radius: 6px;
+      padding: 10px 12px;
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      user-select: all;
+    }
+    .copy-btn {
+      background-color: #3A82F7;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 10px 16px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background-color 0.15s;
+    }
+    .copy-btn:hover { background-color: #4A92FF; }
+    .copy-btn:active { background-color: #2A72E7; }
+    .copy-btn.copied {
+      background-color: #4CAF50;
+    }
+    .notice {
+      font-size: 12px;
+      color: #9AA0A6;
+      margin-top: 12px;
+      line-height: 1.5;
+    }
+    .qr-container {
+      display: flex;
+      justify-content: center;
+      margin-top: 16px;
+    }
+    .qr-container canvas {
+      border-radius: 8px;
+    }
+    .footer {
+      text-align: center;
+      margin-top: 24px;
+      font-size: 12px;
+      color: #666666;
+    }
+    .footer a {
+      color: #3A82F7;
+      text-decoration: none;
+    }
+    .footer a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Support <span class="accent">RNMR</span></h1>
+    <p>
+      RNMR is free and open source. If it saves you time, consider
+      supporting its continued development with a small contribution.
+    </p>
+
+    <div class="method">
+      <div class="method-label">USDT &mdash; TRC20 Network</div>
+      <div class="address-row">
+        <div class="address" id="wallet">TKy1aQvUbmFqVnvAgiVSE9X1g3QYogWkH9</div>
+        <button class="copy-btn" id="copyBtn" onclick="copyAddress()">Copy</button>
+      </div>
+      <div class="notice">
+        Please use the <strong>TRC20 network</strong> when sending USDT.
+        Crypto transactions are non-refundable.
+      </div>
+      <div class="qr-container">
+        <canvas id="qr"></canvas>
+      </div>
+    </div>
+
+    <div class="footer">
+      <a href="https://github.com/salvadordea/RNMR">github.com/salvadordea/RNMR</a>
+    </div>
+  </div>
+
+  <script>
+    // Minimal QR code generator (QR Code Model 2, alphanumeric mode)
+    // Using a lightweight inline implementation to avoid external dependencies.
+    function copyAddress() {
+      const addr = document.getElementById('wallet').textContent;
+      navigator.clipboard.writeText(addr).then(() => {
+        const btn = document.getElementById('copyBtn');
+        btn.textContent = 'Copied';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.textContent = 'Copy';
+          btn.classList.remove('copied');
+        }, 2000);
+      });
+    }
+
+    // Generate QR code via a public API (no JS library needed)
+    (function renderQR() {
+      const addr = 'TKy1aQvUbmFqVnvAgiVSE9X1g3QYogWkH9';
+      const canvas = document.getElementById('qr');
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = function () {
+        canvas.width = 140;
+        canvas.height = 140;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#252525';
+        ctx.fillRect(0, 0, 140, 140);
+        ctx.drawImage(img, 6, 6, 128, 128);
+      };
+      // Use the QR Server API (free, no auth required)
+      img.src = 'https://api.qrserver.com/v1/create-qr-code/?size=128x128&data='
+        + encodeURIComponent(addr)
+        + '&bgcolor=252525&color=EAEAEA&format=png';
+    })();
+  </script>
+</body>
+</html>
