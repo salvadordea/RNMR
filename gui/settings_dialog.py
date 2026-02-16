@@ -196,6 +196,21 @@ class SettingsDialog(QDialog):
         )
         form.addRow("", show_btn)
 
+        # Key action buttons
+        key_btn_layout = QHBoxLayout()
+        remove_key_btn = QPushButton("Remove API Key")
+        remove_key_btn.setToolTip("Clear the stored API key")
+        remove_key_btn.clicked.connect(self._remove_api_key)
+        key_btn_layout.addWidget(remove_key_btn)
+
+        dashboard_btn = QPushButton("Open TMDB Dashboard")
+        dashboard_btn.setToolTip("Open your TMDB API settings in a browser")
+        dashboard_btn.clicked.connect(self._open_tmdb_dashboard)
+        key_btn_layout.addWidget(dashboard_btn)
+
+        key_btn_layout.addStretch()
+        form.addRow("", key_btn_layout)
+
         self.language_edit = QLineEdit()
         self.language_edit.setPlaceholderText("en-US")
         form.addRow("Language:", self.language_edit)
@@ -216,6 +231,31 @@ class SettingsDialog(QDialog):
 
         layout.addStretch()
         return widget
+
+    def _remove_api_key(self):
+        """Clear the API key field and persist immediately."""
+        result = QMessageBox.question(
+            self,
+            "Remove API Key",
+            "Remove the stored TMDB API key?\n\n"
+            "Scanning will be disabled until a new key is set.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if result == QMessageBox.Yes:
+            self.api_key_edit.clear()
+            self.mgr.set("tmdb_api_key", "")
+            self.mgr.save()
+            self.settings_changed.emit()
+
+    @staticmethod
+    def _open_tmdb_dashboard():
+        """Open the TMDB API settings page in the default browser."""
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        QDesktopServices.openUrl(
+            QUrl("https://www.themoviedb.org/settings/api")
+        )
 
     # -- Behavior tab --------------------------------------------------
 
@@ -241,9 +281,56 @@ class SettingsDialog(QDialog):
         )
         form.addWidget(self.interactive_cb)
 
+        self.confirm_tmdb_cb = QCheckBox("Always confirm TMDB match")
+        self.confirm_tmdb_cb.setToolTip(
+            "Show a selection dialog with the top TMDB results before "
+            "committing to a match, even when confidence is high."
+        )
+        form.addWidget(self.confirm_tmdb_cb)
+
+        self.ask_media_type_cb = QCheckBox("Always ask media type before search")
+        self.ask_media_type_cb.setToolTip(
+            "Before searching TMDB, show a dialog to confirm whether "
+            "each title group is a TV series or movie."
+        )
+        form.addWidget(self.ask_media_type_cb)
+
         layout.addWidget(group)
+
+        # -- Episode Title Language --
+        ep_group = QGroupBox("Episode Title Language")
+        ep_layout = QVBoxLayout(ep_group)
+        ep_layout.setSpacing(14)
+
+        ep_form = QFormLayout()
+        ep_form.setSpacing(10)
+
+        self.ep_lang_combo = QComboBox()
+        self.ep_lang_combo.addItem("Same as metadata language", "same")
+        self.ep_lang_combo.addItem("Original language", "original")
+        self.ep_lang_combo.addItem("English (forced)", "en")
+        self.ep_lang_combo.setToolTip(
+            "Controls the language used when fetching episode titles from TMDB."
+        )
+        ep_form.addRow("Mode:", self.ep_lang_combo)
+        ep_layout.addLayout(ep_form)
+
+        self.force_english_cb = QCheckBox("Force episode titles to English")
+        self.force_english_cb.setToolTip(
+            "Override the episode title language to English regardless "
+            "of the mode above. Useful for anime and foreign-language series."
+        )
+        self.force_english_cb.toggled.connect(self._on_force_english_toggled)
+        ep_layout.addWidget(self.force_english_cb)
+
+        layout.addWidget(ep_group)
+
         layout.addStretch()
         return widget
+
+    def _on_force_english_toggled(self, checked: bool):
+        """Disable language combo when force-English is active."""
+        self.ep_lang_combo.setEnabled(not checked)
 
     # ------------------------------------------------------------------
     # Load / save
@@ -277,6 +364,17 @@ class SettingsDialog(QDialog):
         # Behavior
         self.overwrite_cb.setChecked(self.mgr.get("ask_before_overwrite", True))
         self.interactive_cb.setChecked(self.mgr.get("interactive_fallback", True))
+        self.confirm_tmdb_cb.setChecked(self.mgr.get("always_confirm_tmdb", False))
+        self.ask_media_type_cb.setChecked(self.mgr.get("always_ask_media_type", False))
+
+        # Episode title language
+        ep_lang = self.mgr.get("episode_title_language", "same")
+        idx = self.ep_lang_combo.findData(ep_lang)
+        if idx >= 0:
+            self.ep_lang_combo.setCurrentIndex(idx)
+        force_en = self.mgr.get("force_english_episode_titles", False)
+        self.force_english_cb.setChecked(force_en)
+        self.ep_lang_combo.setEnabled(not force_en)
 
     def _save_and_close(self):
         series_template = self.series_template_edit.text()
@@ -307,6 +405,16 @@ class SettingsDialog(QDialog):
         self.mgr.set("tmdb_language", self.language_edit.text().strip() or "en-US")
         self.mgr.set("ask_before_overwrite", self.overwrite_cb.isChecked())
         self.mgr.set("interactive_fallback", self.interactive_cb.isChecked())
+        self.mgr.set("always_confirm_tmdb", self.confirm_tmdb_cb.isChecked())
+        self.mgr.set("always_ask_media_type", self.ask_media_type_cb.isChecked())
+        self.mgr.set(
+            "episode_title_language",
+            self.ep_lang_combo.currentData() or "same",
+        )
+        self.mgr.set(
+            "force_english_episode_titles",
+            self.force_english_cb.isChecked(),
+        )
 
         if self.mgr.save():
             self.settings_changed.emit()
@@ -325,6 +433,13 @@ class SettingsDialog(QDialog):
         self.language_edit.setText("en-US")
         self.overwrite_cb.setChecked(True)
         self.interactive_cb.setChecked(True)
+        self.confirm_tmdb_cb.setChecked(False)
+        self.ask_media_type_cb.setChecked(False)
+        idx = self.ep_lang_combo.findData("same")
+        if idx >= 0:
+            self.ep_lang_combo.setCurrentIndex(idx)
+        self.force_english_cb.setChecked(False)
+        self.ep_lang_combo.setEnabled(True)
         self._update_previews()
 
     # ------------------------------------------------------------------

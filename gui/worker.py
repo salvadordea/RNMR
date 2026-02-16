@@ -2,7 +2,7 @@
 import re
 import sys
 from pathlib import Path
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from PySide6.QtCore import QObject, Signal, QThread, QMutex, QWaitCondition
@@ -11,7 +11,6 @@ from PySide6.QtCore import QObject, Signal, QThread, QMutex, QWaitCondition
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from renamer.parser import parse_filename, is_media_file
-from renamer.cleaner import clean_for_search
 from renamer.tmdb import TMDBClient, TMDBError
 from renamer.models import TMDBSeries, TMDBMovie, TMDBEpisode
 from renamer.formatter import (
@@ -25,10 +24,9 @@ from renamer.formatter import (
 )
 from renamer.cache import Cache
 from renamer.id_mapping import IDMapping
-
-# Minimum match confidence (0.0-1.0) below which the interactive
-# fallback dialog is shown, even when TMDB returned results.
-CONFIDENCE_THRESHOLD = 0.6
+from renamer.detection import (
+    DetectionController, DetectionState, Action, BatchContext,
+)
 
 # Sentinel that means "no result provided yet" -- distinct from None
 # which means "user chose to skip".
@@ -59,24 +57,6 @@ class ScanContext:
     skip_all_unresolved: bool = False
 
 
-@dataclass
-class BatchContext:
-    """Resolved TMDB metadata shared by all files with the same parsed title.
-
-    Contains everything needed to format filenames.  No further TMDB
-    calls are required once this object is built.
-    """
-    series: TMDBSeries | None = None
-    movie: TMDBMovie | None = None
-    media_type: str | None = None
-    mapped: bool = False
-    skipped: bool = False
-    metadata_source: str = "inferred"  # "tmdb" | "inferred"
-    metadata_language: str = "en-US"
-    # Pre-fetched episode details keyed by (season, episode_number)
-    episode_cache: dict[tuple[int, int], TMDBEpisode] = field(default_factory=dict)
-
-
 class ScanWorker(QObject):
     """Worker for scanning files and building rename plan.
 
@@ -96,9 +76,12 @@ class ScanWorker(QObject):
     progress = Signal(int, int)  # current, total
     item_found = Signal(int, object)  # row index, RenameItem
     log = Signal(str)
+    status_update = Signal(str)  # non-blocking status bar message
     finished = Signal()
     error = Signal(str)
     lookup_failed = Signal(dict)  # emitted once per group when TMDB returns nothing
+    tmdb_select_requested = Signal(dict)  # emitted when always_confirm_tmdb is ON
+    type_select_requested = Signal(dict)  # emitted when always_ask_media_type is ON
 
     def __init__(
         self,
@@ -110,7 +93,11 @@ class ScanWorker(QObject):
         movie_template: str | None = None,
         interactive: bool = False,
         api_key: str | None = None,
-        metadata_language: str = "en-US"
+        metadata_language: str = "en-US",
+        episode_title_language: str = "same",
+        force_english_episode_titles: bool = False,
+        always_confirm_tmdb: bool = False,
+        always_ask_media_type: bool = False,
     ):
         super().__init__()
         self.folder_path = Path(folder_path)
@@ -122,12 +109,19 @@ class ScanWorker(QObject):
         self._interactive = interactive
         self._api_key = api_key
         self._metadata_language = metadata_language
+        self._episode_title_language = episode_title_language
+        self._force_english_episode_titles = force_english_episode_titles
+        self._always_confirm_tmdb = always_confirm_tmdb
+        self._always_ask_media_type = always_ask_media_type
         self._cancelled = False
 
         # Cross-thread synchronization for interactive lookups
         self._lookup_mutex = QMutex()
         self._lookup_condition = QWaitCondition()
         self._lookup_result = _NO_RESULT  # set by main thread
+
+        # Set during Phase 2 for episode prefetch
+        self._current_tmdb_client: TMDBClient | None = None
 
     def cancel(self):
         """Cancel the operation."""
@@ -294,38 +288,6 @@ class ScanWorker(QObject):
         return groups
 
     # ------------------------------------------------------------------
-    # TMDB fetch helpers
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _fetch_series(tmdb_client: TMDBClient, tmdb_id: int) -> TMDBSeries | None:
-        data = tmdb_client._request(f"/tv/{tmdb_id}")
-        if not data:
-            return None
-        first_air_date = data.get("first_air_date", "")
-        return TMDBSeries(
-            id=data["id"],
-            name=data.get("name", ""),
-            original_name=data.get("original_name", ""),
-            first_air_year=int(first_air_date[:4]) if first_air_date else None,
-            overview=data.get("overview", ""),
-        )
-
-    @staticmethod
-    def _fetch_movie(tmdb_client: TMDBClient, tmdb_id: int) -> TMDBMovie | None:
-        data = tmdb_client._request(f"/movie/{tmdb_id}")
-        if not data:
-            return None
-        release_date = data.get("release_date", "")
-        return TMDBMovie(
-            id=data["id"],
-            title=data.get("title", ""),
-            original_title=data.get("original_title", ""),
-            year=int(release_date[:4]) if release_date else None,
-            overview=data.get("overview", ""),
-        )
-
-    # ------------------------------------------------------------------
     # Phase 2 -- Batch identity resolution (ALL TMDB + ALL dialogs)
     # ------------------------------------------------------------------
 
@@ -352,13 +314,27 @@ class ScanWorker(QObject):
                 f"[BATCH] Group '{group_key}': {len(entries)} file(s)"
             )
 
+        # Build controller once per scan
+        self._current_tmdb_client = tmdb_client
+        controller = None
+        if tmdb_client:
+            controller = DetectionController(
+                tmdb_client=tmdb_client,
+                id_mapping=id_mapping,
+                settings={
+                    "always_ask_media_type": self._always_ask_media_type,
+                    "always_confirm_tmdb": self._always_confirm_tmdb,
+                    "interactive_fallback": self._interactive,
+                },
+                log_fn=lambda msg: self.log.emit(msg),
+            )
+
         for group_key, group_entries in groups.items():
             if self._cancelled:
                 break
 
             ctx = self._resolve_group(
-                group_key, group_entries, tmdb_client, id_mapping,
-                scan_context,
+                group_key, group_entries, controller, scan_context,
             )
             batch_contexts[group_key] = ctx
 
@@ -369,185 +345,112 @@ class ScanWorker(QObject):
         self,
         group_key: str,
         group_entries: list[tuple[Path, Any]],
-        tmdb_client: TMDBClient | None,
-        id_mapping: IDMapping,
+        controller: DetectionController | None,
         scan_context: ScanContext,
     ) -> BatchContext:
-        """Resolve ONE title group.
+        """Resolve ONE title group using the DetectionController state machine."""
+        if not controller:
+            return BatchContext(metadata_language=scan_context.metadata_language)
 
-        Steps:
-          1. Check mapped IDs
-          2. Automatic TMDB search (one call)
-          3. Interactive fallback dialog (once) -- skipped when
-             *scan_context.skip_all_unresolved* is set
-          4. Pre-fetch all episode details for every (season, episode)
-             pair in the group
-        """
-        ctx = BatchContext(metadata_language=scan_context.metadata_language)
-        if not tmdb_client:
-            return ctx
-
-        first_filepath, first_parsed = group_entries[0]
-        ctx.media_type = first_parsed.media_type
-
-        # -- Step 1: Check whether any file already has a mapped ID --
-        mapped_id = None
-        mapped_type = None
-        for filepath, _parsed in group_entries:
-            mid, mtype = id_mapping.get_id(filepath.name)
-            if mid and mtype:
-                mapped_id = mid
-                mapped_type = mtype
-                break
+        batch = controller.create_batch(
+            group_key, group_entries, scan_context.metadata_language,
+        )
 
         try:
-            if mapped_id and mapped_type:
-                # ---------- Mapped-ID path (no search needed) ----------
-                self.log.emit(
-                    f"Using mapped ID for '{group_key}': "
-                    f"{mapped_type}:{mapped_id}"
-                )
-                ctx.mapped = True
-                ctx.media_type = mapped_type
-                if mapped_type == "series":
-                    ctx.series = self._fetch_series(tmdb_client, mapped_id)
-                else:
-                    ctx.movie = self._fetch_movie(tmdb_client, mapped_id)
-            else:
-                # -- Step 2: Automatic search with aggressive cleaning --
-                is_series = first_parsed.media_type == "series"
+            while True:
+                if self._cancelled:
+                    controller.skip(batch)
+                    break
 
-                if is_series:
-                    # For series the parser already stripped the episode
-                    # pattern from title_guess, so clean that.
-                    clean_title, _ = clean_for_search(
-                        first_parsed.title_guess, is_series=True
-                    )
-                    search_title = clean_title or first_parsed.title_guess
-                    self.log.emit(
-                        f"[CLEAN] Series search: '{search_title}'"
-                    )
-                    ctx.series = tmdb_client.search_series(search_title)
-                    # Retry with parser title if cleaner gave different text
-                    if (not ctx.series
-                            and search_title != first_parsed.title_guess):
-                        self.log.emit(
-                            f"[CLEAN] Retry with parser title: "
-                            f"'{first_parsed.title_guess}'"
-                        )
-                        ctx.series = tmdb_client.search_series(
-                            first_parsed.title_guess
-                        )
-                else:
-                    # For movies, use raw_name so the cleaner can
-                    # truncate at the year boundary.
-                    clean_title, clean_year = clean_for_search(
-                        first_parsed.raw_name, is_series=False
-                    )
-                    search_title = clean_title or first_parsed.title_guess
-                    search_year = (
-                        clean_year
-                        if clean_year is not None
-                        else first_parsed.year
-                    )
-                    self.log.emit(
-                        f"[CLEAN] Movie search: '{search_title}'"
-                        + (f" year={search_year}" if search_year else "")
-                    )
-                    ctx.movie = tmdb_client.search_movie(
-                        search_title, search_year
-                    )
-                    # Retry with parser title if cleaner gave different text
-                    if (not ctx.movie
-                            and search_title != first_parsed.title_guess):
-                        self.log.emit(
-                            f"[CLEAN] Retry with parser title: "
-                            f"'{first_parsed.title_guess}'"
-                        )
-                        ctx.movie = tmdb_client.search_movie(
-                            first_parsed.title_guess, first_parsed.year
-                        )
+                action = controller.step(batch)
 
-                # -- Step 3: Interactive fallback (once per group) --
-                # Trigger when there are no results OR confidence is low.
-                found = ctx.series or ctx.movie
-                confidence = found.confidence if found else 0.0
-                if found:
-                    self.log.emit(
-                        f"[MATCH] '{group_key}' -> confidence={confidence:.2f}"
-                    )
-
-                needs_fallback = (
-                    not found or confidence < CONFIDENCE_THRESHOLD
-                )
-                if needs_fallback and self._interactive:
+                if action == Action.DONE:
+                    break
+                elif action == Action.CONTINUE:
+                    continue
+                elif action == Action.NEED_MEDIA_TYPE:
                     if scan_context.skip_all_unresolved:
-                        # User previously chose "Skip All"
-                        ctx.skipped = True
-                        self.log.emit(
-                            f"[SKIP] Auto-skipping '{group_key}' "
-                            f"({len(group_entries)} file(s)) -- "
-                            f"skip-all active"
-                        )
+                        controller.skip(batch)
+                        continue
+                    self.type_select_requested.emit(batch.signal_info())
+                    result = self._wait_for_response()
+                    if result is None:
+                        controller.skip(batch)
+                    elif result.get("__skip_all__"):
+                        scan_context.skip_all_unresolved = True
+                        controller.skip(batch)
                     else:
-                        user_result = self._wait_for_user_input(
-                            first_filepath, first_parsed, group_entries
-                        )
-                        if (user_result
-                                and user_result.get("__skip_all__")):
-                            scan_context.skip_all_unresolved = True
-                            ctx.skipped = True
-                            self.log.emit(
-                                f"[SKIP] Skipping '{group_key}' "
-                                f"({len(group_entries)} file(s)) -- "
-                                f"skip-all activated by user"
-                            )
-                        elif user_result:
-                            tmdb_id = user_result.get("tmdb_id")
-                            media_type = user_result.get("media_type")
-                            title = user_result.get("title")
-                            if tmdb_id and media_type:
-                                # Save mapping so future scans skip
-                                # the dialog
-                                id_mapping.set_id(
-                                    first_filepath.name, tmdb_id,
-                                    media_type, title
-                                )
-                                self.log.emit(
-                                    f"Saved mapping for '{group_key}': "
-                                    f"{media_type}:{tmdb_id}"
-                                )
-                                ctx.mapped = True
-                                ctx.media_type = media_type
-                                if media_type == "series":
-                                    ctx.series = self._fetch_series(
-                                        tmdb_client, tmdb_id
-                                    )
-                                else:
-                                    ctx.movie = self._fetch_movie(
-                                        tmdb_client, tmdb_id
-                                    )
-                        else:
-                            # Single-batch skip (None result)
-                            ctx.skipped = True
-                            self.log.emit(
-                                f"[SKIP] Skipping '{group_key}' "
-                                f"({len(group_entries)} file(s)) -- "
-                                f"user skipped"
-                            )
+                        controller.set_media_type(batch, result["media_type"])
+                elif action == Action.NEED_SELECTION:
+                    if scan_context.skip_all_unresolved:
+                        controller.skip(batch)
+                        continue
+                    self.tmdb_select_requested.emit(batch.signal_info())
+                    result = self._wait_for_response()
+                    if result is None:
+                        controller.skip(batch)
+                    elif result.get("__skip_all__"):
+                        scan_context.skip_all_unresolved = True
+                        controller.skip(batch)
+                    else:
+                        controller.set_selection(batch, result)
+                elif action == Action.NEED_FALLBACK:
+                    if scan_context.skip_all_unresolved:
+                        controller.skip(batch)
+                        continue
+                    self.lookup_failed.emit(batch.signal_info())
+                    result = self._wait_for_response()
+                    if result is None:
+                        controller.skip(batch)
+                    elif result.get("__skip_all__"):
+                        scan_context.skip_all_unresolved = True
+                        controller.skip(batch)
+                    else:
+                        controller.set_fallback_result(batch, result)
 
-            # Determine metadata source from resolution outcome
-            if ctx.series or ctx.movie:
-                ctx.metadata_source = "tmdb"
+            # Metadata source finalization
+            if batch.found and batch.metadata_source not in ("ffprobe", "tmdb"):
+                batch.metadata_source = "tmdb"
+            elif not batch.found and not batch.skipped:
+                batch.metadata_source = "unidentified"
 
-            # -- Step 4: Pre-fetch episode details for the whole group --
-            if ctx.series and self.include_episode_title:
-                self._prefetch_episodes(ctx, group_entries, tmdb_client)
+            # Episode prefetch (after CONFIRMED only)
+            if (
+                batch.state == DetectionState.CONFIRMED
+                and batch.series
+                and self.include_episode_title
+            ):
+                ctx = batch.to_batch_context()
+                self._prefetch_episodes(
+                    ctx, group_entries, self._current_tmdb_client,
+                )
+                batch.episode_cache = ctx.episode_cache
 
         except Exception as e:
             self.log.emit(f"[WARN] TMDB error for group '{group_key}': {e}")
 
-        return ctx
+        return batch.to_batch_context()
+
+    # ------------------------------------------------------------------
+    # Episode prefetch helpers
+    # ------------------------------------------------------------------
+
+    def _resolve_episode_language(self, ctx: BatchContext) -> str | None:
+        """Determine the language to use for episode title requests.
+
+        Returns a language tag to pass to ``get_episode_details``, or
+        *None* to use the client's default (metadata_language).
+        """
+        if self._force_english_episode_titles:
+            return "en-US"
+
+        mode = self._episode_title_language
+        if mode == "en":
+            return "en-US"
+        if mode == "original" and ctx.series and ctx.series.original_language:
+            return ctx.series.original_language
+        # "same" or fallback -- use the client default
+        return None
 
     def _prefetch_episodes(
         self,
@@ -561,6 +464,8 @@ class ScanWorker(QObject):
         Only fetches for single-episode files (multi-episode files
         don't include episode titles).
         """
+        ep_language = self._resolve_episode_language(ctx)
+
         pairs: set[tuple[int, int]] = set()
         for _, parsed in group_entries:
             if parsed.season is not None and len(parsed.episodes) == 1:
@@ -572,7 +477,8 @@ class ScanWorker(QObject):
                 break
             try:
                 ep = tmdb_client.get_episode_details(
-                    ctx.series.id, season, ep_num
+                    ctx.series.id, season, ep_num,
+                    language=ep_language,
                 )
                 if ep:
                     ctx.episode_cache[(season, ep_num)] = ep
@@ -580,31 +486,14 @@ class ScanWorker(QObject):
                 pass  # episode detail is nice-to-have
 
     # ------------------------------------------------------------------
-    # Interactive prompt (pauses worker, wakes when main thread responds)
+    # Unified interactive wait
     # ------------------------------------------------------------------
 
-    def _wait_for_user_input(self, filepath, parsed, group_entries):
-        """Emit lookup_failed and block until the main thread responds."""
-        # Collect all unique seasons from the group
-        seasons = sorted({
-            p.season for _, p in group_entries
-            if p.season is not None
-        })
-
-        info = {
-            "filepath": str(filepath),
-            "parsed_title": parsed.title_guess,
-            "media_type": parsed.media_type,
-            "seasons": seasons,
-            "year": parsed.year,
-            "file_count": len(group_entries),
-        }
-
+    def _wait_for_response(self):
+        """Block until the main thread provides a result via set_lookup_result()."""
         self._lookup_mutex.lock()
         self._lookup_result = _NO_RESULT
         self._lookup_mutex.unlock()
-
-        self.lookup_failed.emit(info)
 
         self._lookup_mutex.lock()
         while self._lookup_result is _NO_RESULT and not self._cancelled:
@@ -615,7 +504,6 @@ class ScanWorker(QObject):
 
         if self._cancelled or result is None:
             return None
-
         return result
 
     # ------------------------------------------------------------------

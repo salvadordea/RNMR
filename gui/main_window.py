@@ -1,6 +1,4 @@
 """Main window for RNMR GUI."""
-import json
-from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -19,8 +17,12 @@ from .settings_dialog import SettingsDialog
 from .settings import SettingsManager
 from .id_dialog import SetIDDialog
 from .failed_lookup_dialog import FailedLookupDialog, SKIP, SEARCH_MANUALLY, ENTER_ID, SKIP_ALL
+from .media_type_dialog import MediaTypeDialog, SERIES as MT_SERIES, MOVIE as MT_MOVIE, SKIP as MT_SKIP, SKIP_ALL as MT_SKIP_ALL
 from .search_dialog import TMDBSearchDialog
+from .tmdb_select_dialog import TMDBSelectDialog, SKIP as SEL_SKIP, SKIP_ALL as SEL_SKIP_ALL
 from renamer.id_mapping import IDMapping
+from renamer.history import RenameHistoryManager
+from .setup_wizard import SetupWizard
 
 
 class MetadataDialog(QDialog):
@@ -55,6 +57,16 @@ class MetadataDialog(QDialog):
                 source_label = QLabel("TMDB \u2714")
                 source_label.setStyleSheet(
                     f"color: {COLORS['success']}; font-weight: bold;"
+                )
+            elif source == "ffprobe":
+                source_label = QLabel("TMDB (via embedded metadata) \u2714")
+                source_label.setStyleSheet(
+                    f"color: {COLORS['accent']}; font-weight: bold;"
+                )
+            elif source == "unidentified":
+                source_label = QLabel("Unknown \u2716")
+                source_label.setStyleSheet(
+                    f"color: {COLORS['error']}; font-weight: bold;"
                 )
             else:
                 source_label = QLabel("Inferred from filename \u26A0")
@@ -123,8 +135,47 @@ class MainWindow(QMainWindow):
         # Settings
         self.settings = SettingsManager()
 
+        # Persistent rename history
+        self._history = RenameHistoryManager()
+
         # Setup UI
         self._setup_ui()
+
+        # First-run setup wizard (after UI is built so badge can update)
+        self._check_api_key_on_startup()
+
+    def _has_api_key(self) -> bool:
+        """Return True if a TMDB API key is configured (settings or env)."""
+        key = self.settings.get("tmdb_api_key", "")
+        if key:
+            return True
+        import os
+        return bool(os.environ.get("TMDB_API_KEY"))
+
+    def _check_api_key_on_startup(self):
+        """Show setup wizard if no API key is configured."""
+        if self._has_api_key():
+            self._update_api_key_badge()
+            return
+
+        self._update_api_key_badge()
+
+        wizard = SetupWizard(self)
+        if wizard.exec() == SetupWizard.Accepted:
+            api_key = wizard.get_api_key()
+            if api_key:
+                self.settings.set("tmdb_api_key", api_key)
+                self.settings.save()
+                self._log("TMDB API key saved.")
+        self._update_api_key_badge()
+        self._update_button_states()
+
+    def _update_api_key_badge(self):
+        """Show or hide the 'API Key Required' badge."""
+        if self._has_api_key():
+            self._api_key_badge.setVisible(False)
+        else:
+            self._api_key_badge.setVisible(True)
 
     def _setup_ui(self):
         """Setup the user interface."""
@@ -189,6 +240,8 @@ class MainWindow(QMainWindow):
     def _on_settings_changed(self):
         """Handle settings changes."""
         self.settings.reload()
+        self._update_api_key_badge()
+        self._update_button_states()
         self._log("Settings updated. Rescan to apply new naming format.")
 
     def _show_about(self):
@@ -265,6 +318,18 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.clear_btn, 2, 2)
         layout.addWidget(self.stop_btn, 2, 3)
 
+        # Row 3: API key badge (hidden when key is present)
+        self._api_key_badge = QLabel("API Key Required  --  Set one in Edit > Settings")
+        self._api_key_badge.setAlignment(Qt.AlignCenter)
+        self._api_key_badge.setStyleSheet(
+            f"color: {COLORS['error']}; font-weight: bold; "
+            f"background-color: rgba(244, 67, 54, 0.12); "
+            f"border: 1px solid {COLORS['error']}; border-radius: 4px; "
+            f"padding: 4px;"
+        )
+        self._api_key_badge.setVisible(False)
+        layout.addWidget(self._api_key_badge, 3, 0, 1, 4)
+
         return group
 
     def _create_table(self) -> QTableWidget:
@@ -318,8 +383,8 @@ class MainWindow(QMainWindow):
         self.progress_bar.setFixedHeight(6)
 
         # Undo button
-        self.undo_btn = QPushButton("Undo")
-        self.undo_btn.setToolTip("Revert the most recent rename transaction")
+        self.undo_btn = QPushButton("Undo Last Rename")
+        self.undo_btn.setToolTip("Revert the most recent rename batch")
         self.undo_btn.clicked.connect(self._undo_last_rename)
         self.undo_btn.setEnabled(False)
 
@@ -396,11 +461,12 @@ class MainWindow(QMainWindow):
     def _update_button_states(self):
         """Update button enabled states."""
         has_folder = bool(self.folder_edit.text())
+        has_key = self._has_api_key()
         is_scanning = self.scan_thread is not None
         is_renaming = self.rename_thread is not None
         idle = not is_scanning and not is_renaming
 
-        self.scan_btn.setEnabled(has_folder and idle)
+        self.scan_btn.setEnabled(has_folder and has_key and idle)
         self.clear_btn.setEnabled(bool(self.items) and idle)
         self.undo_btn.setEnabled(idle and self._has_undoable_transactions())
 
@@ -417,19 +483,7 @@ class MainWindow(QMainWindow):
 
     def _has_undoable_transactions(self) -> bool:
         """Check if any non-reverted transactions exist in history."""
-        folder = self.folder_edit.text()
-        if not folder:
-            return False
-        history_path = Path(folder) / ".rnmr_history.json"
-        if not history_path.exists():
-            return False
-        try:
-            history = json.loads(
-                history_path.read_text(encoding="utf-8")
-            )
-            return any(not t.get("reverted", False) for t in history)
-        except (json.JSONDecodeError, OSError):
-            return False
+        return self._history.has_undoable()
 
     def _clear_results(self):
         """Clear the preview list and reset UI state."""
@@ -442,111 +496,97 @@ class MainWindow(QMainWindow):
         self._update_button_states()
 
     def _undo_last_rename(self):
-        """Revert the most recent non-reverted rename transaction."""
-        folder = self.folder_edit.text()
-        if not folder:
-            return
+        """Revert the most recent non-reverted rename transaction.
 
-        history_path = Path(folder) / ".rnmr_history.json"
-        if not history_path.exists():
-            return
-
-        try:
-            history = json.loads(
-                history_path.read_text(encoding="utf-8")
-            )
-        except (json.JSONDecodeError, OSError):
-            QMessageBox.warning(
-                self, "Undo Error", "Could not read history file."
-            )
-            return
-
-        # Find latest non-reverted transaction
-        target_idx = None
-        for i in range(len(history) - 1, -1, -1):
-            if not history[i].get("reverted", False):
-                target_idx = i
-                break
-
-        if target_idx is None:
+        Safety rules:
+        - If any old_path already exists (conflict), abort the entire
+          batch and show a warning.  No partial reverts.
+        - If the renamed file is missing (e.g. user moved it), skip it
+          safely but still mark the transaction as reverted.
+        """
+        tx = self._history.get_last_undoable()
+        if tx is None:
             QMessageBox.information(
                 self, "Nothing to Undo", "No transactions to undo."
             )
             return
 
-        target = history[target_idx]
-        items = target.get("items", [])
-        if not items:
+        if not tx.items:
+            self._history.mark_reverted(tx.batch_id)
+            self._update_button_states()
             return
 
-        # Validate all items can be reverted
-        errors: list[str] = []
-        for item in items:
-            new_p = Path(item["new_path"]) if item.get("new_path") else Path(folder) / item["new"]
-            orig_p = Path(item["original_path"]) if item.get("original_path") else Path(folder) / item["original"]
-
+        # --- Pre-flight: detect conflicts (old_path already exists) ---
+        conflicts: list[str] = []
+        missing: list[str] = []
+        for entry in tx.items:
+            new_p = Path(entry.new_path)
+            old_p = Path(entry.old_path)
             if not new_p.exists():
-                errors.append(f"Not found: {new_p.name}")
-            if orig_p.exists() and orig_p.resolve() != new_p.resolve():
-                errors.append(f"Already exists: {orig_p.name}")
+                missing.append(new_p.name)
+            elif old_p.exists() and old_p.resolve() != new_p.resolve():
+                conflicts.append(old_p.name)
 
-        if errors:
-            msg = "Cannot undo -- the following issues were found:\n\n"
-            msg += "\n".join(errors[:10])
-            if len(errors) > 10:
-                msg += f"\n... and {len(errors) - 10} more"
+        # Hard-abort on conflicts -- no partial revert
+        if conflicts:
+            msg = (
+                "Cannot undo -- the following original filenames "
+                "already exist:\n\n"
+            )
+            msg += "\n".join(conflicts[:10])
+            if len(conflicts) > 10:
+                msg += f"\n... and {len(conflicts) - 10} more"
             QMessageBox.warning(self, "Cannot Undo", msg)
             return
 
-        # Confirm
+        # Build confirmation message
+        revertable = len(tx.items) - len(missing)
+        confirm_text = (
+            f"Revert {revertable} rename(s) from batch {tx.batch_id}?\n"
+            f"(timestamp: {tx.timestamp})"
+        )
+        if missing:
+            confirm_text += (
+                f"\n\n{len(missing)} file(s) no longer exist and will "
+                f"be skipped."
+            )
+
         result = QMessageBox.question(
             self,
             "Confirm Undo",
-            f"Revert {len(items)} rename(s) from "
-            f"{target.get('timestamp', 'unknown')}?",
+            confirm_text,
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
         if result != QMessageBox.Yes:
             return
 
-        # Perform revert
+        # --- Execute revert ---
         reverted = 0
-        revert_errors: list[str] = []
-        for item in items:
-            new_p = Path(item["new_path"]) if item.get("new_path") else Path(folder) / item["new"]
-            orig_p = Path(item["original_path"]) if item.get("original_path") else Path(folder) / item["original"]
+        skipped = 0
+        for entry in tx.items:
+            new_p = Path(entry.new_path)
+            old_p = Path(entry.old_path)
+
+            if not new_p.exists():
+                skipped += 1
+                self._log(f"[UNDO] Skipped (missing): {new_p.name}")
+                continue
+
             try:
-                new_p.rename(orig_p)
+                new_p.rename(old_p)
                 reverted += 1
             except Exception as e:
-                revert_errors.append(f"{new_p.name}: {e}")
+                self._log(f"[UNDO] Error reverting {new_p.name}: {e}")
 
-        # Mark transaction as reverted
-        history[target_idx]["reverted"] = True
-        history[target_idx]["reverted_at"] = (
-            datetime.now().isoformat(timespec="seconds")
-        )
+        # Always mark as reverted (even if some files were missing)
+        self._history.mark_reverted(tx.batch_id)
 
-        try:
-            history_path.write_text(
-                json.dumps(history, indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
-        except OSError as e:
-            self._log(f"[WARN] Could not update history: {e}")
-
-        self._log(f"Undo complete: {reverted} file(s) reverted")
-        if revert_errors:
-            self._log(
-                f"[WARN] {len(revert_errors)} error(s) during undo"
-            )
-            for err in revert_errors:
-                self._log(f"  {err}")
-
-        self.status_label.setText(
-            f"Undo: {reverted} file(s) reverted"
-        )
+        summary = f"Undo complete: {reverted} file(s) reverted"
+        if skipped:
+            summary += f", {skipped} skipped (missing)"
+        self._log(summary)
+        self.status_label.setText(summary)
         self._update_button_states()
 
     def _start_scan(self):
@@ -572,6 +612,10 @@ class MainWindow(QMainWindow):
             interactive=use_tmdb and self.settings.get("interactive_fallback", True),
             api_key=self.settings.get("tmdb_api_key") or None,
             metadata_language=self.settings.get("tmdb_language", "en-US"),
+            episode_title_language=self.settings.get("episode_title_language", "same"),
+            force_english_episode_titles=self.settings.get("force_english_episode_titles", False),
+            always_confirm_tmdb=use_tmdb and self.settings.get("always_confirm_tmdb", False),
+            always_ask_media_type=use_tmdb and self.settings.get("always_ask_media_type", False),
         )
 
         # Create thread
@@ -584,9 +628,12 @@ class MainWindow(QMainWindow):
         self.scan_worker.progress.connect(self._on_scan_progress)
         self.scan_worker.item_found.connect(self._on_item_found)
         self.scan_worker.log.connect(self._log)
+        self.scan_worker.status_update.connect(self._on_status_update)
         self.scan_worker.finished.connect(self._on_scan_finished)
         self.scan_worker.error.connect(self._on_scan_error)
         self.scan_worker.lookup_failed.connect(self._on_lookup_failed)
+        self.scan_worker.tmdb_select_requested.connect(self._on_tmdb_select_requested)
+        self.scan_worker.type_select_requested.connect(self._on_type_select_requested)
 
         # Start
         self.scan_thread.start()
@@ -618,6 +665,11 @@ class MainWindow(QMainWindow):
         self.progress_bar.setRange(0, total)
         self.progress_bar.setValue(current)
         self.status_label.setText(f"Scanning: {current}/{total}")
+
+    @Slot(str)
+    def _on_status_update(self, message: str):
+        """Handle non-blocking status bar updates from the worker."""
+        self.status_label.setText(message)
 
     @Slot(int, object)
     def _on_item_found(self, row: int, item: RenameItem):
@@ -665,6 +717,14 @@ class MainWindow(QMainWindow):
             source_item = QTableWidgetItem("\u2714 TMDB")
             source_item.setForeground(QColor(COLORS["success"]))
             source_item.setToolTip("Metadata from TMDB")
+        elif source == "ffprobe":
+            source_item = QTableWidgetItem("\u2714 Probe")
+            source_item.setForeground(QColor(COLORS["accent"]))
+            source_item.setToolTip("TMDB (via embedded metadata)")
+        elif source == "unidentified":
+            source_item = QTableWidgetItem("\u2716 Unknown")
+            source_item.setForeground(QColor(COLORS["error"]))
+            source_item.setToolTip("TMDB was available but no match was found")
         else:
             source_item = QTableWidgetItem("\u26A0 Inferred")
             source_item.setForeground(QColor(COLORS["warning"]))
@@ -775,6 +835,63 @@ class MainWindow(QMainWindow):
             result = {"__skip_all__": True}
 
         # Wake the worker thread with the result (or None for skip)
+        if hasattr(self, 'scan_worker'):
+            self.scan_worker.set_lookup_result(result)
+
+    @Slot(dict)
+    def _on_tmdb_select_requested(self, info: dict):
+        """Handle TMDB selection prompt -- show dialog on main thread."""
+        result = None
+
+        api_key = self.settings.get("tmdb_api_key", "")
+        if not api_key:
+            import os
+            api_key = os.environ.get("TMDB_API_KEY", "")
+
+        dlg = TMDBSelectDialog(
+            results=info.get("results", []),
+            parsed_title=info.get("parsed_title", ""),
+            media_type=info.get("media_type", "series"),
+            file_count=info.get("file_count", 1),
+            api_key=api_key,
+            parent=self,
+        )
+        self._active_lookup_dialog = dlg
+        choice = dlg.exec()
+        self._active_lookup_dialog = None
+
+        if choice == QDialog.Accepted:
+            tmdb_id, media_type, title = dlg.get_result()
+            if tmdb_id and media_type:
+                result = {
+                    "tmdb_id": tmdb_id,
+                    "media_type": media_type,
+                    "title": title,
+                }
+        elif choice == SEL_SKIP_ALL:
+            result = {"__skip_all__": True}
+        # SEL_SKIP and reject both leave result as None (skip batch)
+
+        if hasattr(self, 'scan_worker'):
+            self.scan_worker.set_lookup_result(result)
+
+    @Slot(dict)
+    def _on_type_select_requested(self, info: dict):
+        """Handle media-type confirmation prompt."""
+        dlg = MediaTypeDialog(info, self)
+        self._active_lookup_dialog = dlg
+        choice = dlg.exec()
+        self._active_lookup_dialog = None
+
+        if choice == MT_SERIES:
+            result = {"media_type": "series"}
+        elif choice == MT_MOVIE:
+            result = {"media_type": "movie"}
+        elif choice == MT_SKIP_ALL:
+            result = {"__skip_all__": True}
+        else:
+            result = None
+
         if hasattr(self, 'scan_worker'):
             self.scan_worker.set_lookup_result(result)
 
@@ -1010,63 +1127,39 @@ class MainWindow(QMainWindow):
     def _save_transaction(
         self, items: list[tuple[int, "RenameItem"]]
     ):
-        """Save a rename transaction to .rnmr_history.json."""
+        """Persist a rename transaction to the centralized history DB."""
         folder = self.folder_edit.text()
         if not folder:
             return
 
-        history_path = Path(folder) / ".rnmr_history.json"
-
-        # Load existing history
-        history: list[dict] = []
-        if history_path.exists():
-            try:
-                history = json.loads(
-                    history_path.read_text(encoding="utf-8")
-                )
-            except (json.JSONDecodeError, OSError):
-                history = []
-
-        # Build transaction record
-        transaction: dict = {
-            "timestamp": datetime.now().isoformat(timespec="seconds"),
-            "folder": folder,
-            "items": [],
-        }
-
+        # Collect successfully renamed entries
+        entries: list[dict] = []
+        metadata_source = "inferred"
         for _row, item in items:
             if item.status != "renamed":
                 continue
-            entry: dict = {
-                "original": item.original_path.name,
-                "original_path": str(item.original_path),
-                "new": item.new_name,
+            entries.append({
+                "old_path": str(item.original_path),
                 "new_path": str(item.new_path) if item.new_path else "",
-                "status": item.status,
-                "metadata_source": (
-                    item.metadata.get("metadata_source", "inferred")
-                    if item.metadata else "inferred"
-                ),
-            }
-            if item.metadata and item.metadata.get("tmdb_id"):
-                entry["tmdb_id"] = item.metadata["tmdb_id"]
-            transaction["items"].append(entry)
+            })
+            # Use the metadata source from the first renamed item
+            if item.metadata and item.metadata.get("metadata_source"):
+                metadata_source = item.metadata["metadata_source"]
 
-        if not transaction["items"]:
+        if not entries:
             return
 
-        history.append(transaction)
-
         try:
-            history_path.write_text(
-                json.dumps(history, indent=2, ensure_ascii=False),
-                encoding="utf-8",
+            batch_id = self._history.save_transaction(
+                folder=folder,
+                items=entries,
+                metadata_source=metadata_source,
             )
             self._log(
-                f"Transaction saved: {len(transaction['items'])} "
-                f"item(s) to {history_path.name}"
+                f"Transaction saved: {len(entries)} item(s), "
+                f"batch {batch_id}"
             )
-        except OSError as e:
+        except Exception as e:
             self._log(f"[WARN] Could not save transaction: {e}")
 
     def closeEvent(self, event):

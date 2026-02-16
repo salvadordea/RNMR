@@ -34,6 +34,7 @@ class TMDBSeries:
     first_air_year: int | None
     overview: str = ""
     confidence: float = 1.0
+    original_language: str = ""
 
 
 @dataclass

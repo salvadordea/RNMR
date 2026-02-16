@@ -12,9 +12,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QIcon
 
 from gui.main_window import MainWindow
 from gui.theme import DARK_STYLESHEET
+from renamer.runtime import resource_path
 
 
 def main():
@@ -25,6 +27,11 @@ def main():
     )
 
     app = QApplication(sys.argv)
+
+    # Application icon (window + taskbar)
+    icon_path = resource_path("resources/rnmr.png")
+    if icon_path.is_file():
+        app.setWindowIcon(QIcon(str(icon_path)))
 
     # Apply dark theme
     app.setStyleSheet(DARK_STYLESHEET)

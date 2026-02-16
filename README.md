@@ -1,22 +1,28 @@
 # RNMR - Media File Renamer
 
-A CLI tool for renaming media files (movies and TV series) using TMDB metadata.
+A desktop application and CLI tool for renaming media files (movies and TV series) using TMDB metadata.
 
 ## Features
 
+- **Desktop GUI** with dark theme, powered by PySide6
+- **First-run setup wizard** for TMDB API key configuration
 - Automatic detection of movies and TV series
 - Episode pattern recognition (S01E04, 1x04, S01E04E05, etc.)
 - TMDB integration for official titles and episode names
+- **Interactive TMDB selection** -- search, filter by media type, and pick the correct match from within the modal
+- **Detection state machine** -- clean separation of TMDB lookup logic from UI
 - **Original title priority** - uses original language titles by default
 - **Subtitle support** - automatically renames associated .srt files
+- **Persistent undo** -- SQLite-backed rename history; undo the last batch rename at any time
+- **ffprobe metadata fallback** -- extracts embedded titles when filename parsing fails
 - Local caching to minimize API calls
 - Smart title matching using similarity scoring
-- Interactive mode for ambiguous matches
 - **Manual TMDB ID disambiguation** - set specific IDs for problematic files
 - Dry-run mode for safe previewing
 - Confirmation prompt before renaming
 - File limit for batch processing
 - Recursive directory processing
+- **Standalone Windows executable** via PyInstaller
 
 ## Requirements
 
@@ -239,6 +245,59 @@ The ID will be verified against TMDB before saving. Manual mappings are stored i
 
 Manual IDs take priority over automatic TMDB search results.
 
+## Building a Standalone Executable (Windows)
+
+RNMR can be packaged as a single `.exe` file that runs on any Windows
+machine without Python installed.
+
+### Prerequisites
+
+```bash
+pip install pyinstaller PySide6 requests python-dotenv
+```
+
+### Bundling ffprobe (optional)
+
+If you want embedded-metadata extraction to work out of the box, place
+a copy of `ffprobe.exe` in the `resources/` directory before building.
+You can get it from [ffmpeg.org/download.html](https://ffmpeg.org/download.html)
+(the Windows builds include `ffprobe.exe`).
+
+If `ffprobe.exe` is not bundled, the app still works -- ffprobe features
+will simply require the user to have ffmpeg installed and on their PATH.
+
+### Build
+
+```bash
+build_windows.bat
+```
+
+Or run directly:
+
+```bash
+pyinstaller app.spec
+```
+
+### Output
+
+The executable is generated at:
+
+```
+dist\RNMR.exe
+```
+
+### Notes
+
+- **No Python required** on the target machine.
+- **TMDB API key**: Users must provide their own API key via the
+  Settings dialog or a `TMDB_API_KEY` environment variable.
+  Get a free key at [themoviedb.org/settings/api](https://www.themoviedb.org/settings/api).
+- **ffprobe**: Bundled inside the executable when `resources/ffprobe.exe`
+  is present at build time. Otherwise falls back to system PATH.
+  ffprobe is part of the [FFmpeg](https://ffmpeg.org/) project and is
+  licensed under the LGPL v2.1+. See `LICENSE_FFMPEG.txt` for details.
+- The build uses `--onefile` and `--windowed` mode (no console window).
+
 ## Safety Features
 
 - **No overwrites**: Skips if destination file exists
@@ -250,22 +309,32 @@ Manual IDs take priority over automatic TMDB search results.
 
 ```
 renamer/
-  renamer.py     # CLI entrypoint
-  parser.py      # Filename parsing + subtitle detection
-  tmdb.py        # TMDB API client
-  formatter.py   # Output formatting
-  cache.py       # Local JSON cache
-  models.py      # Data classes
-  id_mapping.py  # Manual TMDB ID disambiguation
+  renamer.py              # CLI entrypoint
+  parser.py               # Filename parsing + subtitle detection
+  tmdb.py                 # TMDB API client with scoring/candidates
+  formatter.py            # Output formatting
+  cache.py                # Local JSON cache
+  models.py               # Data classes
+  id_mapping.py           # Manual TMDB ID disambiguation
+  detection.py            # Detection state machine (DetectionController)
+  history.py              # SQLite-backed persistent rename history
+  metadata_extractor.py   # ffprobe metadata extraction
+  runtime.py              # PyInstaller path resolution & ffprobe detection
+  cleaner.py              # Title cleaning for TMDB search queries
 
 gui/
-  main.py        # GUI entry point
-  main_window.py # Main application window
-  worker.py      # Background workers for scanning/renaming
-  theme.py       # Dark theme stylesheet
-  settings.py    # Settings persistence
-  settings_dialog.py  # Template settings dialog
-  id_dialog.py   # TMDB ID disambiguation dialog
+  main.py                 # GUI entry point
+  main_window.py          # Main application window
+  worker.py               # Background workers for scanning/renaming
+  theme.py                # Dark theme stylesheet
+  settings.py             # Settings persistence
+  settings_dialog.py      # Settings dialog with behavior/template tabs
+  setup_wizard.py         # First-run TMDB API key wizard
+  tmdb_select_dialog.py   # Interactive TMDB match selection with search
+  media_type_dialog.py    # Media type confirmation dialog
+  failed_lookup_dialog.py # Fallback dialog for unresolved titles
+  search_dialog.py        # Manual TMDB search dialog
+  id_dialog.py            # TMDB ID disambiguation dialog
 ```
 
 ## License

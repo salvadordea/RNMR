@@ -3,7 +3,7 @@ import os
 import time
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 import requests
 
@@ -125,6 +125,7 @@ class TMDBClient:
         self.verbose = verbose
         self.language = language or DEFAULT_LANGUAGE
         self._last_request_time = 0.0
+        self.last_raw_results: list[dict] = []
         self._log(f"Using TMDB language: {self.language}")
 
     def _log(self, message: str) -> None:
@@ -202,38 +203,23 @@ class TMDBClient:
 
         return None
 
-    def _choose_best_match(
+    def _score_results(
         self,
         results: list[dict],
         title: str,
         year: int | None = None,
-        is_movie: bool = True
-    ) -> tuple[dict | None, float]:
-        """
-        Choose the best match from search results.
+        is_movie: bool = True,
+    ) -> list[tuple[float, float, dict]]:
+        """Score and sort results.
 
-        Args:
-            results: List of search results
-            title: The title we're searching for
-            year: Optional year to match
-            is_movie: Whether we're searching for movies
-
-        Returns:
-            (best_result, confidence) where *confidence* is 0.0-1.0
-            indicating how certain the match is.
+        Returns list of ``(rank_score, confidence, result_dict)`` sorted
+        by rank_score descending.
         """
         if not results:
-            return None, 0.0
-
-        # If interactive mode and callback is set
-        if self.interactive_callback and len(results) > 1:
-            selected = self.interactive_callback(results, title)
-            if selected is not None and 0 <= selected < len(results):
-                return results[selected], 1.0
+            return []
 
         title_norm = normalize_for_comparison(title)
 
-        # Score each result
         scored = []
         for result in results:
             title_field = "title" if is_movie else "name"
@@ -290,13 +276,154 @@ class TMDBClient:
 
             scored.append((score, conf, result))
 
-        # Sort by score descending
         scored.sort(key=lambda x: x[0], reverse=True)
+        return scored
 
+    def _choose_best_match(
+        self,
+        results: list[dict],
+        title: str,
+        year: int | None = None,
+        is_movie: bool = True
+    ) -> tuple[dict | None, float]:
+        """
+        Choose the best match from search results.
+
+        Args:
+            results: List of search results
+            title: The title we're searching for
+            year: Optional year to match
+            is_movie: Whether we're searching for movies
+
+        Returns:
+            (best_result, confidence) where *confidence* is 0.0-1.0
+            indicating how certain the match is.
+        """
+        if not results:
+            return None, 0.0
+
+        # If interactive mode and callback is set
+        if self.interactive_callback and len(results) > 1:
+            selected = self.interactive_callback(results, title)
+            if selected is not None and 0 <= selected < len(results):
+                return results[selected], 1.0
+
+        scored = self._score_results(results, title, year, is_movie)
         if not scored:
             return None, 0.0
 
         return scored[0][2], scored[0][1]
+
+    def scored_candidates(
+        self,
+        title: str,
+        year: int | None = None,
+        is_movie: bool = True,
+        max_results: int = 5,
+    ) -> list[dict]:
+        """Return the top *max_results* from ``last_raw_results``, scored.
+
+        Each returned dict is the raw TMDB result dict augmented with a
+        ``_score`` key.  No API calls are made -- this reads from the
+        results cached by the most recent ``search_movie`` /
+        ``search_series`` call.
+        """
+        if not self.last_raw_results:
+            return []
+
+        title_norm = normalize_for_comparison(title)
+        scored = []
+        for result in self.last_raw_results:
+            title_field = "title" if is_movie else "name"
+            original_title_field = "original_title" if is_movie else "original_name"
+            date_field = "release_date" if is_movie else "first_air_date"
+
+            result_title = result.get(title_field, "")
+            original_title = result.get(original_title_field, "")
+
+            title_sim = max(
+                similarity_score(title, result_title),
+                similarity_score(title, original_title),
+            )
+
+            result_title_norm = normalize_for_comparison(result_title)
+            original_title_norm = normalize_for_comparison(original_title)
+            exact_match = (
+                title_norm == result_title_norm
+                or title_norm == original_title_norm
+            )
+            exact_bonus = 0.3 if exact_match else 0.0
+
+            year_bonus = 0.0
+            if year:
+                result_date = result.get(date_field, "")
+                if result_date and len(result_date) >= 4:
+                    try:
+                        result_year = int(result_date[:4])
+                        if result_year == year:
+                            year_bonus = 0.25
+                        elif abs(result_year - year) == 1:
+                            year_bonus = 0.1
+                    except ValueError:
+                        pass
+
+            popularity = result.get("popularity", 0)
+            pop_bonus = min(popularity / 1000, 1.0) * 0.05
+
+            score = title_sim + exact_bonus + year_bonus + pop_bonus
+            scored.append((score, result))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        out = []
+        for score, r in scored[:max_results]:
+            entry = dict(r)
+            entry["_score"] = score
+            out.append(entry)
+        return out
+
+    def search_movie_candidates(
+        self, title: str, year: int | None = None, max_results: int = 5,
+    ) -> list[tuple[dict, float]]:
+        """Search movies, return scored ``(result_dict, confidence)`` list.
+
+        No auto-select, no cache write.  Stores results in
+        ``last_raw_results`` for later use by ``scored_candidates``.
+        """
+        params: dict[str, Any] = {"query": title}
+        if year:
+            params["year"] = year
+
+        data = self._request("/search/movie", params)
+        if not data or not data.get("results"):
+            self.last_raw_results = []
+            return []
+
+        self.last_raw_results = data["results"]
+        scored = self._score_results(data["results"], title, year, is_movie=True)
+        return [
+            (entry[2], entry[1]) for entry in scored[:max_results]
+        ]
+
+    def search_series_candidates(
+        self, title: str, max_results: int = 5,
+    ) -> list[tuple[dict, float]]:
+        """Search series, return scored ``(result_dict, confidence)`` list.
+
+        No auto-select, no cache write.  Stores results in
+        ``last_raw_results`` for later use by ``scored_candidates``.
+        """
+        params: dict[str, Any] = {"query": title}
+
+        data = self._request("/search/tv", params)
+        if not data or not data.get("results"):
+            self.last_raw_results = []
+            return []
+
+        self.last_raw_results = data["results"]
+        scored = self._score_results(data["results"], title, is_movie=False)
+        return [
+            (entry[2], entry[1]) for entry in scored[:max_results]
+        ]
 
     def search_movie(self, title: str, year: int | None = None) -> TMDBMovie | None:
         """
@@ -327,7 +454,10 @@ class TMDBClient:
 
         data = self._request("/search/movie", params)
         if not data or not data.get("results"):
+            self.last_raw_results = []
             return None
+
+        self.last_raw_results = data["results"]
 
         # Choose best match
         best, confidence = self._choose_best_match(
@@ -380,14 +510,18 @@ class TMDBClient:
                 name=cached["name"],
                 original_name=cached["original_name"],
                 first_air_year=cached.get("first_air_year"),
-                overview=cached.get("overview", "")
+                overview=cached.get("overview", ""),
+                original_language=cached.get("original_language", ""),
             )
 
         # Search TMDB
         params = {"query": title}
         data = self._request("/search/tv", params)
         if not data or not data.get("results"):
+            self.last_raw_results = []
             return None
+
+        self.last_raw_results = data["results"]
 
         # Choose best match
         best, confidence = self._choose_best_match(
@@ -407,7 +541,8 @@ class TMDBClient:
             original_name=best.get("original_name", ""),
             first_air_year=first_air_year,
             overview=best.get("overview", ""),
-            confidence=confidence
+            confidence=confidence,
+            original_language=best.get("original_language", ""),
         )
 
         # Cache result
@@ -416,7 +551,8 @@ class TMDBClient:
             "name": series.name,
             "original_name": series.original_name,
             "first_air_year": series.first_air_year,
-            "overview": series.overview
+            "overview": series.overview,
+            "original_language": series.original_language,
         })
         self.cache.set_title_id(title, "series", series.id)
 
@@ -426,7 +562,8 @@ class TMDBClient:
         self,
         series_id: int,
         season: int,
-        episode: int
+        episode: int,
+        language: str | None = None,
     ) -> TMDBEpisode | None:
         """
         Get episode details from TMDB.
@@ -435,6 +572,8 @@ class TMDBClient:
             series_id: TMDB series ID
             season: Season number
             episode: Episode number
+            language: Optional language override (e.g. "ja" or "en-US").
+                      When *None*, uses the client's default language.
 
         Returns:
             TMDBEpisode if found, None otherwise
@@ -452,7 +591,10 @@ class TMDBClient:
 
         # Fetch from TMDB
         endpoint = f"/tv/{series_id}/season/{season}/episode/{episode}"
-        data = self._request(endpoint)
+        params = {}
+        if language:
+            params["language"] = language
+        data = self._request(endpoint, params=params or None)
         if not data:
             return None
 

@@ -1,0 +1,27 @@
+FFmpeg / ffprobe License Notice
+================================
+
+This application optionally bundles ffprobe, a component of the FFmpeg
+project, to extract embedded metadata from media files.
+
+FFmpeg is free software licensed under the GNU Lesser General Public
+License (LGPL) version 2.1 or later, with some optional components
+licensed under the GNU General Public License (GPL) version 2 or later.
+
+The ffprobe binary included in this distribution is built from
+unmodified FFmpeg source code.  No modifications have been made to
+FFmpeg or any of its libraries.
+
+You may obtain the complete corresponding source code for FFmpeg at:
+
+    https://ffmpeg.org/download.html
+
+For the full text of the LGPL, see:
+
+    https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
+
+For the full text of the GPL, see:
+
+    https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+
+FFmpeg homepage: https://ffmpeg.org/

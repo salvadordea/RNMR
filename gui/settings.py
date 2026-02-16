@@ -88,6 +88,12 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # Behavior
     "ask_before_overwrite": True,
     "interactive_fallback": True,
+    "always_confirm_tmdb": False,
+    "always_ask_media_type": False,
+
+    # Episode title language
+    "episode_title_language": "same",  # "same" | "original" | "en"
+    "force_english_episode_titles": False,
 
     # State (not shown in settings dialog)
     "last_folder": "",
