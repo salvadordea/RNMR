@@ -1,4 +1,5 @@
 """Background worker for RNMR GUI operations."""
+import hashlib
 import re
 import sys
 from pathlib import Path
@@ -688,3 +689,313 @@ class RenameWorker(QObject):
 
         except Exception as e:
             self.error.emit(str(e))
+
+
+@dataclass
+class DuplicateItem:
+    """Represents a duplicate file result."""
+    path: Path
+    size: int
+    mtime: float
+    hash: str
+    norm_name: str
+    group_type: str  # "hash" or "name"
+
+
+class DuplicateScanWorker(QObject):
+    """Worker for scanning and identifying duplicate files."""
+
+    started = Signal()
+    progress = Signal(int, int)  # current, total
+    status_update = Signal(str)
+    log = Signal(str)
+    finished = Signal(object)  # list of groups
+    error = Signal(str)
+
+    _TAG_PATTERNS = [
+        r'\b(2160p|1080p|720p|480p|4k|8k)\b',
+        r'\b(x264|x265|h264|h265|hevc|av1|avc|xvid|divx)\b',
+        r'\b(bluray|brrip|web[- ]?dl|webrip|hdrip|dvdrip|remux|uhd|hdtv)\b',
+        r'\b(aac|ac3|dts|ddp|truehd|atmos|flac|mp3)\b',
+        r'\b(repack|proper|rerip|extended|internal|limited|uncut)\b',
+        r'\b(dolby|hdr|dv|sdr|hdr10|hdr10\+|hlg)\b',
+        r'\b(web|dl|rip|cam|ts|tc|telesync|dvdscr|screener)\b',
+        r'\b(dual\s*audio|multi|subs?|dubbed)\b',
+        r'\b(10bit|12bit|8bit|hi10p)\b',
+        r'\b(dolby\s*vision|vision|dovi)\b',
+        r'\b(uncensored|remastered|collector\'s|special\s*edition)\b',
+        r'\b(rarbg|yify|yts|evo|ntb|fg|snahp|vxt|ctrlhd)\b',
+    ]
+
+    def __init__(self, folder_path: str, recursive: bool, include_all_files: bool = False):
+        super().__init__()
+        self.folder_path = Path(folder_path)
+        self.recursive = recursive
+        self.include_all_files = include_all_files
+        self._cancelled = False
+
+    def cancel(self):
+        """Cancel the operation."""
+        self._cancelled = True
+
+    def run(self):
+        """Execute duplicate scan operation."""
+        try:
+            self.started.emit()
+            self.status_update.emit("Scanning files...")
+
+            files = self._find_media_files()
+            if not files:
+                self.log.emit("No media files found.")
+                self.finished.emit([])
+                return
+
+            total_files = len(files)
+            file_infos = []
+            for i, path in enumerate(files, start=1):
+                if self._cancelled:
+                    self.log.emit("Duplicate scan cancelled.")
+                    self.finished.emit([])
+                    return
+
+                self.progress.emit(i, total_files)
+                try:
+                    stat = path.stat()
+                    norm_name = self._normalize_name(path.name)
+                    file_infos.append({
+                        "path": path,
+                        "size": stat.st_size,
+                        "mtime": stat.st_mtime,
+                        "norm_name": norm_name,
+                    })
+                except Exception as e:
+                    self.log.emit(f"[WARN] Skipping {path.name}: {e}")
+
+            if self._cancelled:
+                self.log.emit("Duplicate scan cancelled.")
+                self.finished.emit([])
+                return
+
+            # Exact duplicates via hash
+            self.status_update.emit("Computing quick hashes...")
+            exact_groups, full_hashes = self._find_exact_duplicates(file_infos)
+
+            if self._cancelled:
+                self.log.emit("Duplicate scan cancelled.")
+                self.finished.emit([])
+                return
+
+            # Name-normalized duplicates (excluding files already in exact groups)
+            self.status_update.emit("Matching normalized filenames...")
+            name_groups = self._find_name_duplicates(
+                file_infos, exact_groups, full_hashes
+            )
+
+            groups = exact_groups + name_groups
+            self.finished.emit(groups)
+
+        except Exception as e:
+            self.error.emit(str(e))
+
+    # ------------------------------------------------------------------
+    # File discovery
+    # ------------------------------------------------------------------
+
+    def _find_media_files(self) -> list[Path]:
+        """Find media files (or all files when enabled) in the folder."""
+        files = []
+
+        if self.folder_path.is_file():
+            if self.include_all_files or is_media_file(self.folder_path):
+                return [self.folder_path]
+            return []
+
+        if not self.folder_path.is_dir():
+            return []
+
+        if self.recursive:
+            for item in self.folder_path.rglob("*"):
+                if item.is_file() and (self.include_all_files or is_media_file(item)):
+                    files.append(item)
+        else:
+            for item in self.folder_path.iterdir():
+                if item.is_file() and (self.include_all_files or is_media_file(item)):
+                    files.append(item)
+
+        return sorted(files)
+
+    # ------------------------------------------------------------------
+    # Normalization + hashing
+    # ------------------------------------------------------------------
+
+    def _normalize_name(self, filename: str) -> str:
+        """Normalize filename by removing tags, codec, resolution, etc."""
+        name = Path(filename).stem
+        name = re.sub(r'[\[\(\{].*?[\]\)\}]', ' ', name)
+        name = name.replace('.', ' ').replace('_', ' ').replace('-', ' ')
+        for pattern in self._TAG_PATTERNS:
+            name = re.sub(pattern, ' ', name, flags=re.IGNORECASE)
+        name = re.sub(r'[^\w\s]', ' ', name.lower())
+        name = re.sub(r'\s+', ' ', name).strip()
+        return name
+
+    @staticmethod
+    def _md5_full(path: Path, chunk_size: int = 1024 * 1024) -> str:
+        """Compute full MD5 hash for a file."""
+        h = hashlib.md5()
+        with path.open("rb") as f:
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                h.update(chunk)
+        return h.hexdigest()
+
+    @staticmethod
+    def _md5_quick(path: Path, chunk_size: int = 1024 * 1024) -> str:
+        """Compute a quick MD5 hash using first + last chunk plus size."""
+        size = path.stat().st_size
+        h = hashlib.md5()
+        h.update(size.to_bytes(8, byteorder="little", signed=False))
+
+        with path.open("rb") as f:
+            if size <= chunk_size * 2:
+                h.update(f.read())
+            else:
+                first = f.read(chunk_size)
+                h.update(first)
+                f.seek(-chunk_size, 2)
+                last = f.read(chunk_size)
+                h.update(last)
+        return h.hexdigest()
+
+    # ------------------------------------------------------------------
+    # Duplicate detection
+    # ------------------------------------------------------------------
+
+    def _find_exact_duplicates(self, file_infos: list[dict]) -> tuple[list, dict]:
+        """Find exact duplicates using quick hash + full hash verification."""
+        size_groups: dict[int, list[dict]] = {}
+        for info in file_infos:
+            size_groups.setdefault(info["size"], []).append(info)
+
+        quick_candidates = [g for g in size_groups.values() if len(g) > 1]
+        total_quick = sum(len(g) for g in quick_candidates)
+        processed = 0
+
+        quick_groups: dict[tuple[int, str], list[dict]] = {}
+        for group in quick_candidates:
+            for info in group:
+                if self._cancelled:
+                    return [], {}
+                try:
+                    quick = self._md5_quick(info["path"])
+                    key = (info["size"], quick)
+                    quick_groups.setdefault(key, []).append(info)
+                except Exception as e:
+                    self.log.emit(f"[WARN] Hash failed {info['path'].name}: {e}")
+                processed += 1
+                if total_quick:
+                    self.progress.emit(processed, total_quick)
+
+        full_hashes: dict[Path, str] = {}
+        exact_groups = []
+
+        full_candidates = [g for g in quick_groups.values() if len(g) > 1]
+        total_full = sum(len(g) for g in full_candidates)
+        processed = 0
+
+        for group in full_candidates:
+            if self._cancelled:
+                return [], {}
+
+            full_map: dict[str, list[dict]] = {}
+            for info in group:
+                if self._cancelled:
+                    return [], {}
+                try:
+                    full_hash = self._md5_full(info["path"])
+                    full_hashes[info["path"]] = full_hash
+                    full_map.setdefault(full_hash, []).append(info)
+                except Exception as e:
+                    self.log.emit(f"[WARN] Full hash failed {info['path'].name}: {e}")
+                processed += 1
+                if total_full:
+                    self.progress.emit(processed, total_full)
+
+            for h, items in full_map.items():
+                if len(items) > 1:
+                    group_items = []
+                    for info in items:
+                        group_items.append(DuplicateItem(
+                            path=info["path"],
+                            size=info["size"],
+                            mtime=info["mtime"],
+                            hash=full_hashes.get(info["path"], h),
+                            norm_name=info["norm_name"],
+                            group_type="hash",
+                        ))
+                    exact_groups.append({
+                        "group_type": "hash",
+                        "items": group_items,
+                    })
+
+        return exact_groups, full_hashes
+
+    def _find_name_duplicates(
+        self,
+        file_infos: list[dict],
+        exact_groups: list[dict],
+        full_hashes: dict[Path, str],
+    ) -> list[dict]:
+        """Find duplicates by normalized name, excluding exact dupes."""
+        exact_paths = {
+            item.path
+            for group in exact_groups
+            for item in group["items"]
+        }
+
+        name_groups: dict[str, list[dict]] = {}
+        for info in file_infos:
+            if not info["norm_name"]:
+                continue
+            if info["path"] in exact_paths:
+                continue
+            name_groups.setdefault(info["norm_name"], []).append(info)
+
+        groups = []
+        candidates = [g for g in name_groups.values() if len(g) > 1]
+        total_full = sum(len(g) for g in candidates)
+        processed = 0
+
+        for group in candidates:
+            if self._cancelled:
+                return []
+            group_items = []
+            for info in group:
+                if self._cancelled:
+                    return []
+                try:
+                    if info["path"] not in full_hashes:
+                        full_hashes[info["path"]] = self._md5_full(info["path"])
+                except Exception as e:
+                    self.log.emit(f"[WARN] Full hash failed {info['path'].name}: {e}")
+                    full_hashes.setdefault(info["path"], "")
+                processed += 1
+                if total_full:
+                    self.progress.emit(processed, total_full)
+
+                group_items.append(DuplicateItem(
+                    path=info["path"],
+                    size=info["size"],
+                    mtime=info["mtime"],
+                    hash=full_hashes.get(info["path"], ""),
+                    norm_name=info["norm_name"],
+                    group_type="name",
+                ))
+            groups.append({
+                "group_type": "name",
+                "items": group_items,
+            })
+
+        return groups

@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 
 from .theme import COLORS
+from .i18n import t
 
 TMDB_API_URL = "https://www.themoviedb.org/settings/api"
 TMDB_CONFIG_ENDPOINT = "https://api.themoviedb.org/3/configuration"
@@ -53,7 +54,7 @@ class SetupWizard(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self.setWindowTitle("RNMR Setup")
+        self.setWindowTitle(t("RNMR Setup"))
         self.setMinimumWidth(520)
         self.setMinimumHeight(340)
         self.setModal(True)
@@ -86,7 +87,7 @@ class SetupWizard(QDialog):
         layout = QVBoxLayout(page)
         layout.setSpacing(16)
 
-        title = QLabel("TMDB API Key Required")
+        title = QLabel(t("TMDB API Key Required"))
         title.setStyleSheet(
             f"color: {COLORS['accent']}; font-size: 14pt; font-weight: bold;"
         )
@@ -112,7 +113,7 @@ class SetupWizard(QDialog):
         btn_layout.setSpacing(12)
         btn_layout.addStretch()
 
-        get_key_btn = QPushButton("Get API Key")
+        get_key_btn = QPushButton(t("Get API Key"))
         get_key_btn.setObjectName("primaryButton")
         get_key_btn.setToolTip("Opens themoviedb.org in your browser")
         get_key_btn.clicked.connect(
@@ -120,7 +121,7 @@ class SetupWizard(QDialog):
         )
         btn_layout.addWidget(get_key_btn)
 
-        have_key_btn = QPushButton("I Already Have One")
+        have_key_btn = QPushButton(t("I Already Have One"))
         have_key_btn.clicked.connect(lambda: self._stack.setCurrentIndex(1))
         btn_layout.addWidget(have_key_btn)
 
@@ -136,7 +137,7 @@ class SetupWizard(QDialog):
         layout = QVBoxLayout(page)
         layout.setSpacing(16)
 
-        title = QLabel("Enter Your API Key")
+        title = QLabel(t("Enter Your API Key"))
         title.setStyleSheet(
             f"color: {COLORS['accent']}; font-size: 14pt; font-weight: bold;"
         )
@@ -153,7 +154,7 @@ class SetupWizard(QDialog):
         layout.addWidget(hint)
 
         self._key_edit = QLineEdit()
-        self._key_edit.setPlaceholderText("Paste your TMDB API key here...")
+        self._key_edit.setPlaceholderText(t("Paste your TMDB API key here..."))
         self._key_edit.setMinimumHeight(36)
         layout.addWidget(self._key_edit)
 
@@ -167,13 +168,13 @@ class SetupWizard(QDialog):
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(12)
 
-        back_btn = QPushButton("Back")
+        back_btn = QPushButton(t("Back"))
         back_btn.clicked.connect(lambda: self._stack.setCurrentIndex(0))
         btn_layout.addWidget(back_btn)
 
         btn_layout.addStretch()
 
-        self._validate_btn = QPushButton("Validate && Save")
+        self._validate_btn = QPushButton(t("Validate && Save"))
         self._validate_btn.setObjectName("primaryButton")
         self._validate_btn.clicked.connect(self._on_validate)
         btn_layout.addWidget(self._validate_btn)
@@ -189,7 +190,7 @@ class SetupWizard(QDialog):
         layout = QVBoxLayout(page)
         layout.setSpacing(16)
 
-        title = QLabel("Setup Complete")
+        title = QLabel(t("Setup Complete"))
         title.setStyleSheet(
             f"color: {COLORS['success']}; font-size: 14pt; font-weight: bold;"
         )
@@ -207,7 +208,7 @@ class SetupWizard(QDialog):
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
 
-        continue_btn = QPushButton("Continue")
+        continue_btn = QPushButton(t("Continue"))
         continue_btn.setObjectName("primaryButton")
         continue_btn.clicked.connect(self.accept)
         btn_layout.addWidget(continue_btn)
@@ -224,14 +225,14 @@ class SetupWizard(QDialog):
     def _on_validate(self):
         key = self._key_edit.text().strip()
         if not key:
-            self._status_label.setText("Please enter an API key.")
+            self._status_label.setText(t("Please enter an API key."))
             self._status_label.setStyleSheet(
                 f"color: {COLORS['warning']}; font-weight: bold;"
             )
             return
 
         self._validate_btn.setEnabled(False)
-        self._validate_btn.setText("Validating...")
+        self._validate_btn.setText(t("Validating..."))
         self._status_label.setText("")
 
         # Force UI repaint before blocking network call
@@ -241,7 +242,7 @@ class SetupWizard(QDialog):
         ok, msg = validate_api_key(key)
 
         self._validate_btn.setEnabled(True)
-        self._validate_btn.setText("Validate && Save")
+        self._validate_btn.setText(t("Validate && Save"))
 
         if ok:
             self._api_key = key

@@ -75,6 +75,9 @@ TEMPLATE_VARIABLES = {
 # ---------------------------------------------------------------------------
 
 DEFAULT_SETTINGS: dict[str, Any] = {
+    # App
+    "app_language": "en",
+
     # Naming templates
     "series_template": DEFAULT_SERIES_TEMPLATE,
     "movie_template": DEFAULT_MOVIE_TEMPLATE,

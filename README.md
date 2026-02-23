@@ -5,6 +5,7 @@ A desktop application and CLI tool for renaming media files (movies and TV serie
 ## Features
 
 - **Desktop GUI** with dark theme, powered by PySide6
+- **Duplicate Finder tool** in a dedicated tab (name-normalized + hash-based duplicate detection)
 - **First-run setup wizard** for TMDB API key configuration
 - Automatic detection of movies and TV series
 - Episode pattern recognition (S01E04, 1x04, S01E04E05, etc.)
@@ -14,6 +15,8 @@ A desktop application and CLI tool for renaming media files (movies and TV serie
 - **Original title priority** - uses original language titles by default
 - **Subtitle support** - automatically renames associated .srt files
 - **Persistent undo** -- SQLite-backed rename history; undo the last batch rename at any time
+- **Safe duplicate deletion** -- moves files to `.rnmr_trash` (undoable), with optional permanent delete
+- **Multi-language UI foundation** -- English/Spanish app language setting (applies after restart)
 - **ffprobe metadata fallback** -- extracts embedded titles when filename parsing fails
 - Local caching to minimize API calls
 - Smart title matching using similarity scoring
@@ -304,6 +307,30 @@ dist\RNMR.exe
 - **Error isolation**: Single file failures don't stop the batch
 - **Dry-run mode**: Always preview before renaming
 - **Confirmation prompt**: Optional confirmation before execution
+- **Safe delete flow (Duplicate Finder)**: default action moves files to `.rnmr_trash` instead of deleting permanently
+
+## Duplicate Finder (GUI)
+
+The **Duplicate Finder** tab provides:
+
+- Duplicate groups by **normalized filename** (case-insensitive; strips common quality/codec/release tags)
+- Exact duplicate groups by **MD5** (quick hash first/last MB + full hash verification)
+- Group actions: `Keep Newest`, `Keep Largest`, `Manual Pick`
+- Export reports: `CSV` or `JSON`
+- Trash tools: `Open Trash`, `Empty Trash`
+- Delete modes:
+  - **Safe Delete**: move selected files to `.rnmr_trash` (undoable via `Undo Last Rename`)
+  - **Permanent Delete**: irreversible deletion
+
+Notes:
+- Duplicate scan runs in background, with progress and cancel support.
+- You can enable `Include all files` to scan beyond media extensions.
+
+## App Language (GUI)
+
+- Language can be set in `Settings > General > App Language`.
+- Current supported languages: `English`, `Espanol`.
+- Language changes are applied on next app restart.
 
 ## Project Structure
 
@@ -325,6 +352,7 @@ renamer/
 gui/
   main.py                 # GUI entry point
   main_window.py          # Main application window
+  i18n.py                 # App-level i18n manager + fallback translations
   worker.py               # Background workers for scanning/renaming
   theme.py                # Dark theme stylesheet
   settings.py             # Settings persistence
@@ -335,6 +363,14 @@ gui/
   failed_lookup_dialog.py # Fallback dialog for unresolved titles
   search_dialog.py        # Manual TMDB search dialog
   id_dialog.py            # TMDB ID disambiguation dialog
+
+resources/i18n/
+  rnmr_es.ts              # Spanish translation catalog (Qt TS)
+  rnmr_es.qm              # Compiled Qt translation bundle
+
+scripts/
+  build_i18n.ps1          # Build .qm from .ts (uses pyside6-lrelease/lrelease)
+  update_i18n.ps1         # Optional lupdate helper (for tr()-based extraction)
 ```
 
 ## Support RNMR

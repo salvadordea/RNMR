@@ -16,6 +16,8 @@ from PySide6.QtGui import QIcon
 
 from gui.main_window import MainWindow
 from gui.theme import DARK_STYLESHEET
+from gui.settings import SettingsManager
+from gui.i18n import i18n
 from renamer.runtime import resource_path
 
 
@@ -27,6 +29,8 @@ def main():
     )
 
     app = QApplication(sys.argv)
+    mgr = SettingsManager()
+    i18n.set_language(app, mgr.get("app_language", "en"))
 
     # Application icon (window + taskbar)
     icon_path = resource_path("resources/rnmr.png")

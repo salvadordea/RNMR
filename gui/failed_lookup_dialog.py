@@ -5,6 +5,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 
 from .theme import COLORS
+from .i18n import t
 
 
 # Return codes
@@ -24,7 +25,7 @@ class FailedLookupDialog(QDialog):
     def __init__(self, info: dict, parent=None):
         super().__init__(parent)
 
-        self.setWindowTitle("TMDB Lookup Failed")
+        self.setWindowTitle(t("TMDB Lookup Failed"))
         self.setMinimumWidth(480)
         self.setModal(True)
 
@@ -35,7 +36,7 @@ class FailedLookupDialog(QDialog):
         layout.setSpacing(16)
 
         # Header
-        header = QLabel("TMDB lookup returned no results")
+        header = QLabel(t("TMDB lookup returned no results"))
         header.setStyleSheet(
             f"color: {COLORS['warning']}; font-size: 12pt; font-weight: bold;"
         )
@@ -80,18 +81,18 @@ class FailedLookupDialog(QDialog):
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(10)
 
-        search_btn = QPushButton("Search Manually")
+        search_btn = QPushButton(t("Search Manually"))
         search_btn.setObjectName("primaryButton")
         search_btn.clicked.connect(lambda: self.done(SEARCH_MANUALLY))
 
-        enter_id_btn = QPushButton("Enter TMDB ID")
+        enter_id_btn = QPushButton(t("Enter TMDB ID"))
         enter_id_btn.clicked.connect(lambda: self.done(ENTER_ID))
 
-        skip_btn = QPushButton("Skip")
+        skip_btn = QPushButton(t("Skip"))
         skip_btn.setToolTip("Skip this batch")
         skip_btn.clicked.connect(lambda: self.done(SKIP))
 
-        skip_all_btn = QPushButton("Skip All")
+        skip_all_btn = QPushButton(t("Skip All"))
         skip_all_btn.setToolTip(
             "Skip this batch and all future unresolved batches in this scan"
         )

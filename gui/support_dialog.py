@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 
 from .theme import COLORS
+from .i18n import t
 
 BMAC_URL = "https://buymeacoffee.com/rnmr"
 
@@ -17,7 +18,7 @@ class SupportDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Support RNMR")
+        self.setWindowTitle(t("Support RNMR"))
         self.setMinimumWidth(420)
         self.setModal(True)
 
@@ -29,7 +30,7 @@ class SupportDialog(QDialog):
         layout.setContentsMargins(24, 24, 24, 24)
 
         # Title
-        title = QLabel("Support RNMR")
+        title = QLabel(t("Support RNMR"))
         title.setStyleSheet(
             f"color: {COLORS['accent']}; font-size: 14pt; font-weight: bold;"
         )
@@ -47,7 +48,7 @@ class SupportDialog(QDialog):
         layout.addWidget(desc)
 
         # Buy Me a Coffee section
-        bmac_label = QLabel("BUY ME A COFFEE")
+        bmac_label = QLabel(t("BUY ME A COFFEE"))
         bmac_label.setStyleSheet(
             f"color: {COLORS['text_muted']}; font-size: 9pt;"
             "font-weight: bold; letter-spacing: 1px;"
@@ -69,7 +70,7 @@ class SupportDialog(QDialog):
         layout.addSpacing(8)
 
         # Crypto section
-        network_label = QLabel("USDT -- TRC20 Network")
+        network_label = QLabel(t("USDT -- TRC20 Network"))
         network_label.setStyleSheet(
             f"color: {COLORS['text_muted']}; font-size: 9pt;"
             "font-weight: bold; text-transform: uppercase; letter-spacing: 1px;"
@@ -93,7 +94,7 @@ class SupportDialog(QDialog):
         addr_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         addr_layout.addWidget(addr_label, stretch=1)
 
-        self._copy_btn = QPushButton("Copy")
+        self._copy_btn = QPushButton(t("Copy"))
         self._copy_btn.setObjectName("primaryButton")
         self._copy_btn.setFixedWidth(70)
         self._copy_btn.clicked.connect(self._copy_address)
@@ -117,7 +118,7 @@ class SupportDialog(QDialog):
         # Close button
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
-        close_btn = QPushButton("Close")
+        close_btn = QPushButton(t("Close"))
         close_btn.clicked.connect(self.accept)
         btn_layout.addWidget(close_btn)
         btn_layout.addStretch()
@@ -126,7 +127,7 @@ class SupportDialog(QDialog):
     def _copy_address(self):
         clipboard = QApplication.clipboard()
         clipboard.setText(USDT_ADDRESS)
-        self._copy_btn.setText("Copied")
+        self._copy_btn.setText(t("Copied"))
         self._copy_btn.setStyleSheet(
             f"background-color: {COLORS['success']};"
             f"border-color: {COLORS['success']};"
@@ -136,7 +137,7 @@ class SupportDialog(QDialog):
         QTimer.singleShot(2000, self._reset_copy_btn)
 
     def _reset_copy_btn(self):
-        self._copy_btn.setText("Copy")
+        self._copy_btn.setText(t("Copy"))
         self._copy_btn.setStyleSheet("")
         self._copy_btn.setObjectName("primaryButton")
         self._copy_btn.style().unpolish(self._copy_btn)

@@ -1,4 +1,5 @@
 """Main window for RNMR GUI."""
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -6,13 +7,14 @@ from PySide6.QtWidgets import (
     QPushButton, QLineEdit, QCheckBox, QTableWidget, QTableWidgetItem,
     QHeaderView, QProgressBar, QTextEdit, QLabel, QFileDialog,
     QGroupBox, QMessageBox, QDialog, QFormLayout, QToolButton,
-    QAbstractItemView, QSizePolicy, QMenuBar, QMenu
+    QAbstractItemView, QSizePolicy, QMenuBar, QMenu, QTabWidget
 )
 from PySide6.QtCore import Qt, QThread, Slot
-from PySide6.QtGui import QIcon, QColor, QAction
+from PySide6.QtGui import QIcon, QColor, QAction, QBrush, QFont, QDesktopServices
+from PySide6.QtCore import QUrl
 
 from .theme import COLORS
-from .worker import ScanWorker, RenameWorker, RenameItem
+from .worker import ScanWorker, RenameWorker, RenameItem, DuplicateScanWorker
 from .settings_dialog import SettingsDialog
 from .settings import SettingsManager
 from .id_dialog import SetIDDialog
@@ -24,6 +26,7 @@ from renamer.id_mapping import IDMapping
 from renamer.history import RenameHistoryManager
 from .setup_wizard import SetupWizard
 from .support_dialog import SupportDialog
+from .i18n import t
 
 
 class MetadataDialog(QDialog):
@@ -31,25 +34,25 @@ class MetadataDialog(QDialog):
 
     def __init__(self, item: RenameItem, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("File Details")
+        self.setWindowTitle(t("File Details"))
         self.setMinimumWidth(450)
 
         layout = QFormLayout(self)
         layout.setSpacing(12)
 
         # Original name
-        layout.addRow("Original:", QLabel(item.original_path.name))
+        layout.addRow(t("Original:") , QLabel(item.original_path.name))
 
         # New name
-        layout.addRow("New Name:", QLabel(item.new_name or "N/A"))
+        layout.addRow(t("New Name:"), QLabel(item.new_name or t("N/A")))
 
         # Status
         status_label = QLabel(item.status.upper())
         status_label.setStyleSheet(self._status_color(item.status))
-        layout.addRow("Status:", status_label)
+        layout.addRow(t("Status:"), status_label)
 
         if item.error_message:
-            layout.addRow("Error:", QLabel(item.error_message))
+            layout.addRow(t("Error:"), QLabel(item.error_message))
 
         # Source indicator
         if item.metadata and item.metadata.get("metadata_source"):
@@ -74,34 +77,34 @@ class MetadataDialog(QDialog):
                 source_label.setStyleSheet(
                     f"color: {COLORS['warning']}; font-weight: bold;"
                 )
-            layout.addRow("Source:", source_label)
+            layout.addRow(t("Source:"), source_label)
 
         # Metadata
         if item.metadata:
             layout.addRow(QLabel(""))  # Spacer
-            layout.addRow("Parsed Title:", QLabel(item.metadata.get("title_guess", "N/A")))
-            layout.addRow("Media Type:", QLabel(item.metadata.get("media_type", "N/A")))
+            layout.addRow(t("Parsed Title:"), QLabel(item.metadata.get("title_guess", t("N/A"))))
+            layout.addRow(t("Media Type:"), QLabel(item.metadata.get("media_type", t("N/A"))))
 
             if item.metadata.get("season") is not None:
-                layout.addRow("Season:", QLabel(str(item.metadata.get("season"))))
+                layout.addRow(t("Season:"), QLabel(str(item.metadata.get("season"))))
             if item.metadata.get("episodes"):
-                layout.addRow("Episode(s):", QLabel(str(item.metadata.get("episodes"))))
+                layout.addRow(t("Episode(s):"), QLabel(str(item.metadata.get("episodes"))))
             if item.metadata.get("year"):
-                layout.addRow("Year:", QLabel(str(item.metadata.get("year"))))
+                layout.addRow(t("Year:"), QLabel(str(item.metadata.get("year"))))
 
             if item.metadata.get("tmdb_id"):
                 id_label = QLabel(str(item.metadata.get("tmdb_id")))
                 if item.metadata.get("mapped_id"):
                     id_label.setText(f"{item.metadata.get('tmdb_id')} (manual)")
                     id_label.setStyleSheet(f"color: {COLORS['accent']};")
-                layout.addRow("TMDB ID:", id_label)
+                layout.addRow(t("TMDB ID:"), id_label)
             if item.metadata.get("tmdb_title"):
-                layout.addRow("TMDB Title:", QLabel(item.metadata.get("tmdb_title")))
+                layout.addRow(t("TMDB Title:"), QLabel(item.metadata.get("tmdb_title")))
             if item.metadata.get("episode_title"):
-                layout.addRow("Episode Title:", QLabel(item.metadata.get("episode_title")))
+                layout.addRow(t("Episode Title:"), QLabel(item.metadata.get("episode_title")))
 
         # Close button
-        close_btn = QPushButton("Close")
+        close_btn = QPushButton(t("Close"))
         close_btn.clicked.connect(self.accept)
         layout.addRow(close_btn)
 
@@ -122,7 +125,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        self.setWindowTitle("RNMR - Media File Renamer")
+        self.setWindowTitle(t("RNMR - Media File Renamer"))
         self.setMinimumSize(900, 650)
         self.resize(1100, 750)
 
@@ -130,6 +133,10 @@ class MainWindow(QMainWindow):
         self.items: list[RenameItem] = []
         self.scan_thread: QThread | None = None
         self.rename_thread: QThread | None = None
+        self.dup_scan_thread: QThread | None = None
+        self.dup_groups: list[dict] = []
+        self._dup_row_map: list[dict | None] = []
+        self._dup_header_rows: set[int] = set()
         self._active_lookup_dialog: QDialog | None = None
         self._last_rename_items: list[tuple[int, RenameItem]] = []
 
@@ -167,7 +174,7 @@ class MainWindow(QMainWindow):
             if api_key:
                 self.settings.set("tmdb_api_key", api_key)
                 self.settings.save()
-                self._log("TMDB API key saved.")
+                self._log(t("TMDB API key saved."))
         self._update_api_key_badge()
         self._update_button_states()
 
@@ -190,6 +197,22 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
+        tabs = QTabWidget()
+        tabs.addTab(self._create_renamer_tab(), t("Renamer"))
+        tabs.addTab(self._create_duplicate_tab(), t("Duplicate Finder"))
+        layout.addWidget(tabs)
+
+        # Initial state
+        self._update_button_states()
+        self._update_dup_button_states()
+
+    def _create_renamer_tab(self) -> QWidget:
+        """Create the renamer tab content."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
         # Top controls
         layout.addWidget(self._create_controls_group())
 
@@ -202,39 +225,38 @@ class MainWindow(QMainWindow):
         # Log panel (collapsible)
         layout.addWidget(self._create_log_panel())
 
-        # Initial state
-        self._update_button_states()
+        return widget
 
     def _create_menu_bar(self):
         """Create the application menu bar."""
         menubar = self.menuBar()
 
         # File menu
-        file_menu = menubar.addMenu("File")
+        file_menu = menubar.addMenu(t("File"))
 
-        exit_action = QAction("Exit", self)
+        exit_action = QAction(t("Exit"), self)
         exit_action.setShortcut("Ctrl+Q")
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
         # Edit menu
-        edit_menu = menubar.addMenu("Edit")
+        edit_menu = menubar.addMenu(t("Edit"))
 
-        settings_action = QAction("Settings...", self)
+        settings_action = QAction(t("Settings..."), self)
         settings_action.setShortcut("Ctrl+,")
         settings_action.triggered.connect(self._show_settings)
         edit_menu.addAction(settings_action)
 
         # Help menu
-        help_menu = menubar.addMenu("Help")
+        help_menu = menubar.addMenu(t("Help"))
 
-        about_action = QAction("About RNMR", self)
+        about_action = QAction(t("About RNMR"), self)
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
 
         help_menu.addSeparator()
 
-        support_action = QAction("Support RNMR...", self)
+        support_action = QAction(t("Support RNMR..."), self)
         support_action.triggered.connect(self._show_support)
         help_menu.addAction(support_action)
 
@@ -249,7 +271,7 @@ class MainWindow(QMainWindow):
         self.settings.reload()
         self._update_api_key_badge()
         self._update_button_states()
-        self._log("Settings updated. Rescan to apply new naming format.")
+        self._log(t("Settings updated. Rescan to apply new naming format."))
 
     def _show_about(self):
         """Show about dialog."""
@@ -276,36 +298,36 @@ class MainWindow(QMainWindow):
 
     def _create_controls_group(self) -> QGroupBox:
         """Create the top controls group."""
-        group = QGroupBox("Settings")
+        group = QGroupBox(t("Settings"))
         layout = QGridLayout(group)
         layout.setSpacing(12)
 
         # Row 0: Folder selection
         self.folder_edit = QLineEdit()
-        self.folder_edit.setPlaceholderText("Select a folder to scan...")
+        self.folder_edit.setPlaceholderText(t("Select a folder to scan..."))
         self.folder_edit.setReadOnly(True)
 
-        browse_btn = QPushButton("Browse...")
+        browse_btn = QPushButton(t("Browse..."))
         browse_btn.clicked.connect(self._browse_folder)
 
         layout.addWidget(self.folder_edit, 0, 0, 1, 3)
         layout.addWidget(browse_btn, 0, 3)
 
         # Row 1: Checkboxes
-        self.recursive_cb = QCheckBox("Recursive")
+        self.recursive_cb = QCheckBox(t("Recursive"))
         self.recursive_cb.setChecked(True)
-        self.recursive_cb.setToolTip("Scan subdirectories")
+        self.recursive_cb.setToolTip(t("Scan subdirectories"))
 
-        self.tmdb_cb = QCheckBox("Use TMDB")
+        self.tmdb_cb = QCheckBox(t("Use TMDB"))
         self.tmdb_cb.setChecked(True)
-        self.tmdb_cb.setToolTip("Fetch metadata from TMDB API")
+        self.tmdb_cb.setToolTip(t("Fetch metadata from TMDB API"))
 
-        self.episode_title_cb = QCheckBox("Include Episode Titles")
+        self.episode_title_cb = QCheckBox(t("Include Episode Titles"))
         self.episode_title_cb.setChecked(True)
-        self.episode_title_cb.setToolTip("Include episode names in series filenames")
+        self.episode_title_cb.setToolTip(t("Include episode names in series filenames"))
 
-        self.dry_run_cb = QCheckBox("Dry Run")
-        self.dry_run_cb.setToolTip("Preview only, don't rename files")
+        self.dry_run_cb = QCheckBox(t("Dry Run"))
+        self.dry_run_cb.setToolTip(t("Preview only, don't rename files"))
 
         layout.addWidget(self.recursive_cb, 1, 0)
         layout.addWidget(self.tmdb_cb, 1, 1)
@@ -313,16 +335,16 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.dry_run_cb, 1, 3)
 
         # Row 2: Scan, Clear, and Stop buttons
-        self.scan_btn = QPushButton("Scan")
+        self.scan_btn = QPushButton(t("Scan"))
         self.scan_btn.setObjectName("primaryButton")
         self.scan_btn.clicked.connect(self._start_scan)
 
-        self.clear_btn = QPushButton("Clear")
-        self.clear_btn.setToolTip("Clear preview list and reset progress")
+        self.clear_btn = QPushButton(t("Clear"))
+        self.clear_btn.setToolTip(t("Clear preview list and reset progress"))
         self.clear_btn.clicked.connect(self._clear_results)
         self.clear_btn.setEnabled(False)
 
-        self.stop_btn = QPushButton("Stop")
+        self.stop_btn = QPushButton(t("Stop"))
         self.stop_btn.clicked.connect(self._stop_scan)
         self.stop_btn.setVisible(False)
 
@@ -331,7 +353,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.stop_btn, 2, 3)
 
         # Row 3: API key badge (hidden when key is present)
-        self._api_key_badge = QLabel("API Key Required  --  Set one in Edit > Settings")
+        self._api_key_badge = QLabel(t("API Key Required  --  Set one in Edit > Settings"))
         self._api_key_badge.setAlignment(Qt.AlignCenter)
         self._api_key_badge.setStyleSheet(
             f"color: {COLORS['error']}; font-weight: bold; "
@@ -377,6 +399,189 @@ class MainWindow(QMainWindow):
 
         return self.table
 
+    def _create_duplicate_tab(self) -> QWidget:
+        """Create the Duplicate Finder tab content."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        # Controls
+        layout.addWidget(self._create_duplicate_controls())
+
+        # Table
+        layout.addWidget(self._create_duplicate_table(), stretch=1)
+
+        # Bottom actions
+        layout.addWidget(self._create_duplicate_actions())
+
+        return widget
+
+    def _create_duplicate_controls(self) -> QGroupBox:
+        """Create the duplicate scan controls."""
+        group = QGroupBox(t("Duplicate Finder"))
+        layout = QGridLayout(group)
+        layout.setSpacing(12)
+
+        self.dup_folder_edit = QLineEdit()
+        self.dup_folder_edit.setPlaceholderText(t("Select a folder to scan for duplicates..."))
+        self.dup_folder_edit.setReadOnly(True)
+
+        browse_btn = QPushButton(t("Browse..."))
+        browse_btn.clicked.connect(self._browse_dup_folder)
+
+        layout.addWidget(self.dup_folder_edit, 0, 0, 1, 3)
+        layout.addWidget(browse_btn, 0, 3)
+
+        self.dup_recursive_cb = QCheckBox(t("Recursive"))
+        self.dup_recursive_cb.setChecked(True)
+        self.dup_recursive_cb.setToolTip(t("Scan subdirectories"))
+
+        layout.addWidget(self.dup_recursive_cb, 1, 0)
+
+        self.dup_all_files_cb = QCheckBox(t("Include all files"))
+        self.dup_all_files_cb.setChecked(False)
+        self.dup_all_files_cb.setToolTip(t("Scan all files, not just media"))
+
+        layout.addWidget(self.dup_all_files_cb, 1, 1)
+
+        dup_hint = QLabel(
+            t(
+                "Safe delete moves files to .rnmr_trash (undoable). Use the Trash menu to open or empty it."
+            )
+        )
+        dup_hint.setWordWrap(True)
+        dup_hint.setObjectName("mutedLabel")
+        layout.addWidget(dup_hint, 3, 0, 1, 4)
+
+        self.dup_scan_btn = QPushButton(t("Scan Duplicates"))
+        self.dup_scan_btn.setObjectName("primaryButton")
+        self.dup_scan_btn.clicked.connect(self._start_dup_scan)
+
+        self.dup_clear_btn = QPushButton(t("Clear"))
+        self.dup_clear_btn.clicked.connect(self._clear_dup_results)
+        self.dup_clear_btn.setEnabled(False)
+
+        self.dup_stop_btn = QPushButton(t("Stop"))
+        self.dup_stop_btn.clicked.connect(self._stop_dup_scan)
+        self.dup_stop_btn.setVisible(False)
+
+        layout.addWidget(self.dup_scan_btn, 2, 0, 1, 2)
+        layout.addWidget(self.dup_clear_btn, 2, 2)
+        layout.addWidget(self.dup_stop_btn, 2, 3)
+
+        self.dup_status_label = QLabel(t("Ready"))
+        self.dup_status_label.setObjectName("mutedLabel")
+        layout.addWidget(self.dup_status_label, 4, 0, 1, 4)
+
+        self.dup_progress_bar = QProgressBar()
+        self.dup_progress_bar.setVisible(False)
+        self.dup_progress_bar.setTextVisible(False)
+        self.dup_progress_bar.setFixedHeight(6)
+        layout.addWidget(self.dup_progress_bar, 5, 0, 1, 4)
+
+        return group
+
+    def _create_duplicate_table(self) -> QTableWidget:
+        """Create the duplicates table widget."""
+        self.dup_table = QTableWidget()
+        self.dup_table.setColumnCount(5)
+        self.dup_table.setHorizontalHeaderLabels(
+            ["", t("Path"), t("Size"), t("Modified"), t("Hash (MD5)")]
+        )
+        self.dup_table.setAlternatingRowColors(True)
+        self.dup_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.dup_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.dup_table.verticalHeader().setVisible(False)
+        self.dup_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+
+        header = self.dup_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Fixed)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.Fixed)
+        header.setSectionResizeMode(3, QHeaderView.Fixed)
+        header.setSectionResizeMode(4, QHeaderView.Stretch)
+        self.dup_table.setColumnWidth(0, 40)
+        self.dup_table.setColumnWidth(2, 110)
+        self.dup_table.setColumnWidth(3, 160)
+
+        return self.dup_table
+
+    def _create_duplicate_actions(self) -> QWidget:
+        """Create the duplicate actions section."""
+        widget = QWidget()
+        root_layout = QVBoxLayout(widget)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(8)
+
+        top_row = QHBoxLayout()
+        top_row.setSpacing(12)
+
+        bottom_row = QHBoxLayout()
+        bottom_row.setSpacing(12)
+
+        keep_newest_btn = QPushButton(t("Keep Newest"))
+        keep_newest_btn.setToolTip("Select all duplicates except the newest file in each group")
+        keep_newest_btn.clicked.connect(self._keep_dup_newest)
+
+        keep_largest_btn = QPushButton(t("Keep Largest"))
+        keep_largest_btn.setToolTip("Select all duplicates except the largest file in each group")
+        keep_largest_btn.clicked.connect(self._keep_dup_largest)
+
+        manual_btn = QPushButton(t("Manual Pick"))
+        manual_btn.setToolTip("Clear selections for manual picking")
+        manual_btn.clicked.connect(self._clear_dup_selections)
+
+        export_btn = QPushButton(t("Export"))
+        export_btn.setToolTip("Export duplicate report")
+        export_menu = QMenu(export_btn)
+        export_csv_action = export_menu.addAction(t("Export CSV"))
+        export_csv_action.triggered.connect(self._export_dup_csv)
+        export_json_action = export_menu.addAction(t("Export JSON"))
+        export_json_action.triggered.connect(self._export_dup_json)
+        export_btn.setMenu(export_menu)
+
+        trash_btn = QPushButton(t("Trash"))
+        trash_btn.setToolTip("Open or empty .rnmr_trash")
+        trash_menu = QMenu(trash_btn)
+        open_trash_action = trash_menu.addAction(t("Open Trash"))
+        open_trash_action.triggered.connect(self._open_dup_trash)
+        empty_trash_action = trash_menu.addAction(t("Empty Trash"))
+        empty_trash_action.triggered.connect(self._empty_dup_trash)
+        trash_btn.setMenu(trash_menu)
+
+        delete_btn = QPushButton(t("Safe Delete"))
+        delete_btn.setToolTip("Safely move selected files to .rnmr_trash (undoable)")
+        delete_btn.setStyleSheet(
+            f"background-color: {COLORS['warning']};"
+            "color: white;"
+            f"border: 1px solid {COLORS['warning']};"
+            "font-weight: 700;"
+        )
+        delete_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        delete_btn.clicked.connect(self._delete_dup_selected)
+
+        hard_delete_btn = QPushButton(t("Permanent Delete"))
+        hard_delete_btn.setToolTip("Irreversibly delete selected files")
+        hard_delete_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        hard_delete_btn.clicked.connect(self._hard_delete_dup_selected)
+
+        top_row.addWidget(keep_newest_btn)
+        top_row.addWidget(keep_largest_btn)
+        top_row.addWidget(manual_btn)
+        top_row.addStretch()
+        top_row.addWidget(export_btn)
+        top_row.addWidget(trash_btn)
+
+        bottom_row.addStretch()
+        bottom_row.addWidget(delete_btn)
+        bottom_row.addWidget(hard_delete_btn)
+
+        root_layout.addLayout(top_row)
+        root_layout.addLayout(bottom_row)
+
+        return widget
+
     def _create_bottom_section(self) -> QWidget:
         """Create the bottom section with rename button and progress."""
         widget = QWidget()
@@ -385,7 +590,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(12)
 
         # Status label
-        self.status_label = QLabel("Ready")
+        self.status_label = QLabel(t("Ready"))
         self.status_label.setObjectName("mutedLabel")
 
         # Progress bar
@@ -395,13 +600,13 @@ class MainWindow(QMainWindow):
         self.progress_bar.setFixedHeight(6)
 
         # Undo button
-        self.undo_btn = QPushButton("Undo Last Rename")
-        self.undo_btn.setToolTip("Revert the most recent rename batch")
+        self.undo_btn = QPushButton(t("Undo Last Rename"))
+        self.undo_btn.setToolTip(t("Revert the most recent rename batch"))
         self.undo_btn.clicked.connect(self._undo_last_rename)
         self.undo_btn.setEnabled(False)
 
         # Rename button
-        self.rename_btn = QPushButton("Rename Selected")
+        self.rename_btn = QPushButton(t("Rename Selected"))
         self.rename_btn.setObjectName("primaryButton")
         self.rename_btn.clicked.connect(self._start_rename)
         self.rename_btn.setEnabled(False)
@@ -426,7 +631,7 @@ class MainWindow(QMainWindow):
         header_layout.setContentsMargins(0, 0, 0, 0)
 
         self.log_toggle_btn = QToolButton()
-        self.log_toggle_btn.setText("Log")
+        self.log_toggle_btn.setText(t("Log"))
         self.log_toggle_btn.setArrowType(Qt.RightArrow)
         self.log_toggle_btn.setCheckable(True)
         self.log_toggle_btn.clicked.connect(self._toggle_log)
@@ -460,7 +665,7 @@ class MainWindow(QMainWindow):
 
         folder = QFileDialog.getExistingDirectory(
             self,
-            "Select Media Folder",
+            t("Select Media Folder"),
             start_dir
         )
         if folder:
@@ -469,6 +674,23 @@ class MainWindow(QMainWindow):
             self.settings.set("last_folder", folder)
             self.settings.save()
             self._update_button_states()
+
+    def _browse_dup_folder(self):
+        """Open folder selection dialog for duplicate scan."""
+        start_dir = self.settings.get("last_folder", "")
+        if not start_dir or not Path(start_dir).exists():
+            start_dir = str(Path.home())
+
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            t("Select Folder to Scan for Duplicates"),
+            start_dir
+        )
+        if folder:
+            self.dup_folder_edit.setText(folder)
+            self.settings.set("last_folder", folder)
+            self.settings.save()
+            self._update_dup_button_states()
 
     def _update_button_states(self):
         """Update button enabled states."""
@@ -488,6 +710,15 @@ class MainWindow(QMainWindow):
             for item in self.items
         )
         self.rename_btn.setEnabled(has_pending and idle)
+
+    def _update_dup_button_states(self):
+        """Update duplicate finder button states."""
+        has_folder = bool(self.dup_folder_edit.text())
+        is_scanning = self.dup_scan_thread is not None
+        idle = not is_scanning
+
+        self.dup_scan_btn.setEnabled(has_folder and idle)
+        self.dup_clear_btn.setEnabled(bool(self.dup_groups) and idle)
 
     def _log(self, message: str):
         """Add message to log."""
@@ -519,7 +750,7 @@ class MainWindow(QMainWindow):
         tx = self._history.get_last_undoable()
         if tx is None:
             QMessageBox.information(
-                self, "Nothing to Undo", "No transactions to undo."
+            self, t("Nothing to Undo"), t("No transactions to undo.")
             )
             return
 
@@ -548,7 +779,7 @@ class MainWindow(QMainWindow):
             msg += "\n".join(conflicts[:10])
             if len(conflicts) > 10:
                 msg += f"\n... and {len(conflicts) - 10} more"
-            QMessageBox.warning(self, "Cannot Undo", msg)
+            QMessageBox.warning(self, t("Cannot Undo"), msg)
             return
 
         # Build confirmation message
@@ -565,7 +796,7 @@ class MainWindow(QMainWindow):
 
         result = QMessageBox.question(
             self,
-            "Confirm Undo",
+            t("Confirm Undo"),
             confirm_text,
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
@@ -658,13 +889,13 @@ class MainWindow(QMainWindow):
             if self._active_lookup_dialog is not None:
                 self._active_lookup_dialog.reject()
                 self._active_lookup_dialog = None
-            self._log("Stopping scan...")
-            self.status_label.setText("Stopping...")
+        self._log(t("Stopping scan..."))
+        self.status_label.setText(t("Stopping..."))
 
     @Slot()
     def _on_scan_started(self):
         """Handle scan started."""
-        self.status_label.setText("Scanning...")
+        self.status_label.setText(t("Scanning..."))
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 1)
         self.progress_bar.setValue(0)
@@ -676,7 +907,7 @@ class MainWindow(QMainWindow):
         """Handle scan progress."""
         self.progress_bar.setRange(0, total)
         self.progress_bar.setValue(current)
-        self.status_label.setText(f"Scanning: {current}/{total}")
+        self.status_label.setText(t("Scanning: {current}/{total}").replace("{current}", str(current)).replace("{total}", str(total)))
 
     @Slot(str)
     def _on_status_update(self, message: str):
@@ -767,9 +998,17 @@ class MainWindow(QMainWindow):
 
         pending = sum(1 for item in self.items if item.status == "pending")
         total = len(self.items)
-        self.status_label.setText(f"Found {total} files ({pending} to rename)")
+        self.status_label.setText(
+            t("Found {total} files ({pending} to rename)")
+            .replace("{total}", str(total))
+            .replace("{pending}", str(pending))
+        )
 
-        self._log(f"Scan complete: {total} files, {pending} pending")
+        self._log(
+            t("Scan complete: {total} files, {pending} pending")
+            .replace("{total}", str(total))
+            .replace("{pending}", str(pending))
+        )
 
         # Cleanup thread
         if self.scan_thread:
@@ -784,10 +1023,10 @@ class MainWindow(QMainWindow):
         """Handle scan error."""
         self.progress_bar.setVisible(False)
         self.stop_btn.setVisible(False)
-        self.status_label.setText("Error")
+        self.status_label.setText(t("Error"))
         self._log(f"[ERROR] {error}")
 
-        QMessageBox.critical(self, "Scan Error", error)
+        QMessageBox.critical(self, t("Scan Error"), error)
 
         if self.scan_thread:
             self.scan_thread.quit()
@@ -795,6 +1034,496 @@ class MainWindow(QMainWindow):
             self.scan_thread = None
 
         self._update_button_states()
+
+    # ------------------------------------------------------------------
+    # Duplicate Finder
+    # ------------------------------------------------------------------
+
+    def _start_dup_scan(self):
+        """Start duplicate scan operation."""
+        folder = self.dup_folder_edit.text()
+        if not folder:
+            return
+
+        self._clear_dup_results()
+
+        self.dup_worker = DuplicateScanWorker(
+            folder_path=folder,
+            recursive=self.dup_recursive_cb.isChecked(),
+            include_all_files=self.dup_all_files_cb.isChecked(),
+        )
+
+        self.dup_scan_thread = QThread()
+        self.dup_worker.moveToThread(self.dup_scan_thread)
+
+        self.dup_scan_thread.started.connect(self.dup_worker.run)
+        self.dup_worker.started.connect(self._on_dup_scan_started)
+        self.dup_worker.progress.connect(self._on_dup_scan_progress)
+        self.dup_worker.status_update.connect(self._on_dup_status_update)
+        self.dup_worker.log.connect(self._log)
+        self.dup_worker.finished.connect(self._on_dup_scan_finished)
+        self.dup_worker.error.connect(self._on_dup_scan_error)
+
+        self.dup_scan_thread.start()
+
+    def _stop_dup_scan(self):
+        """Stop duplicate scan operation."""
+        if self.dup_scan_thread and hasattr(self, "dup_worker"):
+            self.dup_worker.cancel()
+            self._log(t("Stopping duplicate scan..."))
+            self.dup_status_label.setText(t("Stopping..."))
+
+    @Slot()
+    def _on_dup_scan_started(self):
+        """Handle duplicate scan started."""
+        self.dup_status_label.setText(t("Scanning..."))
+        self.dup_progress_bar.setVisible(True)
+        self.dup_progress_bar.setRange(0, 1)
+        self.dup_progress_bar.setValue(0)
+        self.dup_stop_btn.setVisible(True)
+        self._update_dup_button_states()
+
+    @Slot(int, int)
+    def _on_dup_scan_progress(self, current: int, total: int):
+        """Handle duplicate scan progress."""
+        if total <= 0:
+            return
+        self.dup_progress_bar.setRange(0, total)
+        self.dup_progress_bar.setValue(current)
+
+    @Slot(str)
+    def _on_dup_status_update(self, message: str):
+        """Handle duplicate scan status updates."""
+        self.dup_status_label.setText(message)
+
+    @Slot(object)
+    def _on_dup_scan_finished(self, groups: list[dict]):
+        """Handle duplicate scan finished."""
+        self.dup_progress_bar.setVisible(False)
+        self.dup_stop_btn.setVisible(False)
+
+        self.dup_groups = groups or []
+        self._render_dup_groups()
+
+        total_groups = len(self.dup_groups)
+        total_files = sum(len(g["items"]) for g in self.dup_groups)
+        if total_groups == 0:
+            self.dup_status_label.setText(t("No duplicates found."))
+        else:
+            self.dup_status_label.setText(
+                t("Found {groups} group(s), {files} file(s)")
+                .replace("{groups}", str(total_groups))
+                .replace("{files}", str(total_files))
+            )
+
+        if self.dup_scan_thread:
+            self.dup_scan_thread.quit()
+            self.dup_scan_thread.wait()
+            self.dup_scan_thread = None
+
+        self._update_dup_button_states()
+
+    @Slot(str)
+    def _on_dup_scan_error(self, error: str):
+        """Handle duplicate scan error."""
+        self.dup_progress_bar.setVisible(False)
+        self.dup_stop_btn.setVisible(False)
+        self.dup_status_label.setText(t("Error"))
+
+        QMessageBox.critical(self, t("Duplicate Scan Error"), error)
+
+        if self.dup_scan_thread:
+            self.dup_scan_thread.quit()
+            self.dup_scan_thread.wait()
+            self.dup_scan_thread = None
+
+        self._update_dup_button_states()
+
+    def _clear_dup_results(self, keep_status: bool = False):
+        """Clear duplicate results and reset UI state."""
+        self.dup_table.setRowCount(0)
+        self.dup_groups = []
+        self._dup_row_map = []
+        self._dup_header_rows = set()
+        self.dup_progress_bar.setVisible(False)
+        self.dup_progress_bar.setValue(0)
+        if not keep_status:
+            self.dup_status_label.setText(t("Ready"))
+        self._update_dup_button_states()
+
+    def _render_dup_groups(self):
+        """Render duplicate groups into the table."""
+        self.dup_table.setRowCount(0)
+        self._dup_row_map = []
+        self._dup_header_rows = set()
+
+        if not self.dup_groups:
+            return
+
+        group_num = 0
+        for group in self.dup_groups:
+            group_num += 1
+            group_type = group.get("group_type", "name")
+            items = group.get("items", [])
+            if not items:
+                continue
+
+            header_text = (
+                f"Group {group_num} - "
+                f"{'Exact Hash' if group_type == 'hash' else 'Name Match'} "
+                f"({len(items)} files)"
+            )
+            header_row = self.dup_table.rowCount()
+            self.dup_table.insertRow(header_row)
+            header_item = QTableWidgetItem(header_text)
+            header_item.setFlags(Qt.ItemIsEnabled)
+            header_item.setBackground(QBrush(QColor(COLORS["panel_light"])))
+            header_font = QFont()
+            header_font.setBold(True)
+            header_item.setFont(header_font)
+            self.dup_table.setItem(header_row, 1, header_item)
+            self.dup_table.setSpan(header_row, 1, 1, 4)
+            self._dup_row_map.append(None)
+            self._dup_header_rows.add(header_row)
+
+            for item in items:
+                self._add_dup_item_row(item)
+
+        self.dup_table.resizeRowsToContents()
+
+    def _add_dup_item_row(self, item):
+        """Add a duplicate item row."""
+        row_idx = self.dup_table.rowCount()
+        self.dup_table.insertRow(row_idx)
+
+        cb_widget = QWidget()
+        cb_layout = QHBoxLayout(cb_widget)
+        cb_layout.setContentsMargins(0, 0, 0, 0)
+        cb_layout.setAlignment(Qt.AlignCenter)
+        checkbox = QCheckBox()
+        checkbox.setChecked(False)
+        checkbox.stateChanged.connect(lambda state, r=row_idx: self._on_dup_checkbox_changed(r, state))
+        cb_layout.addWidget(checkbox)
+        self.dup_table.setCellWidget(row_idx, 0, cb_widget)
+
+        path_item = QTableWidgetItem(str(item.path))
+        path_item.setToolTip(str(item.path))
+        self.dup_table.setItem(row_idx, 1, path_item)
+
+        size_item = QTableWidgetItem(self._format_size(item.size))
+        self.dup_table.setItem(row_idx, 2, size_item)
+
+        mod_time = datetime.fromtimestamp(item.mtime).strftime("%Y-%m-%d %H:%M")
+        mod_item = QTableWidgetItem(mod_time)
+        self.dup_table.setItem(row_idx, 3, mod_item)
+
+        hash_item = QTableWidgetItem(item.hash or "")
+        self.dup_table.setItem(row_idx, 4, hash_item)
+
+        self._dup_row_map.append({
+            "item": item,
+            "selected": False,
+            "row": row_idx,
+        })
+
+    def _on_dup_checkbox_changed(self, row: int, state: int):
+        """Handle duplicate checkbox change."""
+        if row < len(self._dup_row_map) and self._dup_row_map[row]:
+            self._dup_row_map[row]["selected"] = state == Qt.Checked
+
+    def _set_dup_row_checked(self, row: int, checked: bool):
+        """Set checkbox state for a duplicate row."""
+        if row >= self.dup_table.rowCount():
+            return
+        widget = self.dup_table.cellWidget(row, 0)
+        if widget is None:
+            return
+        cb = widget.findChild(QCheckBox)
+        if cb is not None:
+            cb.blockSignals(True)
+            cb.setChecked(checked)
+            cb.blockSignals(False)
+        if row < len(self._dup_row_map) and self._dup_row_map[row]:
+            self._dup_row_map[row]["selected"] = checked
+
+    def _clear_dup_selections(self):
+        """Clear all duplicate selections."""
+        for row, info in enumerate(self._dup_row_map):
+            if info is None:
+                continue
+            self._set_dup_row_checked(row, False)
+
+    def _keep_dup_newest(self):
+        """Select all except newest file in each group."""
+        if not self.dup_groups:
+            return
+        self._clear_dup_selections()
+        for group in self.dup_groups:
+            items = group.get("items", [])
+            if len(items) < 2:
+                continue
+            newest = max(items, key=lambda i: (i.mtime, i.size))
+            for info in self._dup_row_map:
+                if info and info["item"] in items and info["item"] != newest:
+                    self._set_dup_row_checked(info["row"], True)
+
+    def _keep_dup_largest(self):
+        """Select all except largest file in each group."""
+        if not self.dup_groups:
+            return
+        self._clear_dup_selections()
+        for group in self.dup_groups:
+            items = group.get("items", [])
+            if len(items) < 2:
+                continue
+            largest = max(items, key=lambda i: (i.size, i.mtime))
+            for info in self._dup_row_map:
+                if info and info["item"] in items and info["item"] != largest:
+                    self._set_dup_row_checked(info["row"], True)
+
+    def _get_selected_dup_items(self) -> list:
+        """Return selected duplicate items."""
+        selected = []
+        for info in self._dup_row_map:
+            if info and info["selected"]:
+                selected.append(info["item"])
+        return selected
+
+    def _delete_dup_selected(self):
+        """Delete (move) selected duplicates with confirmation."""
+        selected = self._get_selected_dup_items()
+        if not selected:
+            QMessageBox.information(self, t("No Selection"), t("No files selected for deletion."))
+            return
+
+        folder = self.dup_folder_edit.text()
+        if not folder:
+            return
+
+        trash_path = Path(folder) / ".rnmr_trash"
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Warning)
+        msg.setWindowTitle(t("Confirm Safe Delete"))
+        msg.setTextFormat(Qt.RichText)
+        msg.setText(
+            f"<b>{t('Safe delete will move files to trash, not permanently delete them.')}</b>"
+        )
+        msg.setInformativeText(
+            f"Files selected: {len(selected)}\n"
+            f"Destination: {trash_path}\n\n"
+            + t("You can recover them using 'Undo Last Rename' or from the Trash menu.")
+        )
+        msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        msg.setDefaultButton(QMessageBox.No)
+        preview = "\n".join(str(i.path) for i in selected[:8])
+        if len(selected) > 8:
+            preview += f"\n... and {len(selected) - 8} more"
+        msg.setDetailedText(preview)
+
+        if msg.exec() != QMessageBox.Yes:
+            return
+
+        base = Path(folder)
+        trash_root = trash_path
+        trash_root.mkdir(parents=True, exist_ok=True)
+
+        moved = 0
+        errors = 0
+        entries = []
+        for item in selected:
+            try:
+                rel = item.path.relative_to(base)
+                dest = trash_root / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                if dest.exists():
+                    dest = dest.with_name(f"{dest.stem}_{int(datetime.now().timestamp())}{dest.suffix}")
+                item.path.rename(dest)
+                entries.append({
+                    "old_path": str(item.path),
+                    "new_path": str(dest),
+                })
+                moved += 1
+            except Exception as e:
+                errors += 1
+                self._log(f"[DUP DELETE] Failed {item.path.name}: {e}")
+
+        if entries:
+            try:
+                self._history.save_transaction(
+                    folder=folder,
+                    items=entries,
+                    metadata_source="duplicate_finder",
+                )
+            except Exception as e:
+                self._log(f"[WARN] Could not save delete transaction: {e}")
+
+        summary = f"Moved {moved} file(s) to .rnmr_trash"
+        if errors:
+            summary += f", {errors} error(s)"
+        self.dup_status_label.setText(summary)
+        QMessageBox.information(self, t("Delete Complete"), summary)
+        self._update_button_states()
+        self._clear_dup_results(keep_status=True)
+
+    def _open_dup_trash(self):
+        """Open the .rnmr_trash folder."""
+        folder = self.dup_folder_edit.text()
+        if not folder:
+            return
+        trash_root = Path(folder) / ".rnmr_trash"
+        trash_root.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(trash_root)))
+
+    def _empty_dup_trash(self):
+        """Permanently delete everything in .rnmr_trash."""
+        folder = self.dup_folder_edit.text()
+        if not folder:
+            return
+        trash_root = Path(folder) / ".rnmr_trash"
+        if not trash_root.exists():
+            QMessageBox.information(self, t("Trash Empty"), t("Trash folder does not exist."))
+            return
+
+        result = QMessageBox.warning(
+            self,
+            t("Empty Trash"),
+            (
+                "This will permanently delete everything in:\n"
+                f"{trash_root}\n\n"
+                "This cannot be undone. Proceed?"
+            ),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if result != QMessageBox.Yes:
+            return
+
+        import shutil
+        try:
+            shutil.rmtree(trash_root)
+            trash_root.mkdir(parents=True, exist_ok=True)
+            self.dup_status_label.setText(t("Trash emptied."))
+        except Exception as e:
+            QMessageBox.critical(self, t("Empty Trash Failed"), str(e))
+
+    def _hard_delete_dup_selected(self):
+        """Permanently delete selected duplicates with confirmation."""
+        selected = self._get_selected_dup_items()
+        if not selected:
+            QMessageBox.information(self, t("No Selection"), t("No files selected for deletion."))
+            return
+
+        result = QMessageBox.warning(
+            self,
+            t("Confirm Permanent Delete"),
+            (
+                f"You are about to PERMANENTLY delete {len(selected)} file(s).\n\n"
+                "This cannot be undone. Proceed?"
+            ),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if result != QMessageBox.Yes:
+            return
+
+        deleted = 0
+        errors = 0
+        for item in selected:
+            try:
+                item.path.unlink()
+                deleted += 1
+            except Exception as e:
+                errors += 1
+                self._log(f"[DUP DELETE] Failed {item.path.name}: {e}")
+
+        summary = f"Deleted {deleted} file(s) permanently"
+        if errors:
+            summary += f", {errors} error(s)"
+        self.dup_status_label.setText(summary)
+        QMessageBox.information(self, t("Delete Complete"), summary)
+        self._clear_dup_results(keep_status=True)
+
+    def _export_dup_csv(self):
+        """Export duplicate report to CSV."""
+        if not self.dup_groups:
+            return
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            t("Export Duplicate Report (CSV)"),
+            "duplicates.csv",
+            "CSV Files (*.csv)"
+        )
+        if not filename:
+            return
+
+        try:
+            lines = ["group,group_type,path,size,modified,hash,norm_name"]
+            group_num = 0
+            for group in self.dup_groups:
+                group_num += 1
+                group_type = group.get("group_type", "name")
+                for item in group.get("items", []):
+                    mod_time = datetime.fromtimestamp(item.mtime).isoformat(sep=" ", timespec="minutes")
+                    line = (
+                        f"{group_num},{group_type},"
+                        f"\"{item.path}\",{item.size},\"{mod_time}\","
+                        f"{item.hash},{item.norm_name}"
+                    )
+                    lines.append(line)
+            Path(filename).write_text("\n".join(lines), encoding="utf-8")
+            self.dup_status_label.setText(f"Report exported: {filename}")
+        except Exception as e:
+            QMessageBox.critical(self, t("Export Error"), str(e))
+
+    def _export_dup_json(self):
+        """Export duplicate report to JSON."""
+        if not self.dup_groups:
+            return
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            t("Export Duplicate Report (JSON)"),
+            "duplicates.json",
+            "JSON Files (*.json)"
+        )
+        if not filename:
+            return
+
+        try:
+            out = []
+            group_num = 0
+            for group in self.dup_groups:
+                group_num += 1
+                group_type = group.get("group_type", "name")
+                out.append({
+                    "group": group_num,
+                    "group_type": group_type,
+                    "items": [
+                        {
+                            "path": str(item.path),
+                            "size": item.size,
+                            "modified": datetime.fromtimestamp(item.mtime).isoformat(timespec="seconds"),
+                            "hash": item.hash,
+                            "norm_name": item.norm_name,
+                        }
+                        for item in group.get("items", [])
+                    ],
+                })
+            import json
+            Path(filename).write_text(json.dumps(out, indent=2), encoding="utf-8")
+            self.dup_status_label.setText(f"Report exported: {filename}")
+        except Exception as e:
+            QMessageBox.critical(self, t("Export Error"), str(e))
+
+    @staticmethod
+    def _format_size(size_bytes: int) -> str:
+        """Human-readable size formatting."""
+        if size_bytes < 1024:
+            return f"{size_bytes} B"
+        for unit in ["KB", "MB", "GB", "TB"]:
+            size_bytes /= 1024.0
+            if size_bytes < 1024.0:
+                return f"{size_bytes:.2f} {unit}"
+        return f"{size_bytes:.2f} PB"
 
     @Slot(dict)
     def _on_lookup_failed(self, info: dict):
@@ -1192,4 +1921,11 @@ class MainWindow(QMainWindow):
             self.rename_thread.quit()
             self.rename_thread.wait()
 
+        if self.dup_scan_thread and hasattr(self, "dup_worker"):
+            self.dup_worker.cancel()
+            self.dup_scan_thread.quit()
+            self.dup_scan_thread.wait()
+
         event.accept()
+
+

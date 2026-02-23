@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from renamer.tmdb import TMDBClient, TMDBError
 from .theme import COLORS
+from .i18n import t
 
 
 class SearchWorker(QObject):
@@ -62,7 +63,7 @@ class TMDBSearchDialog(QDialog):
     ):
         super().__init__(parent)
 
-        self.setWindowTitle("Search TMDB")
+        self.setWindowTitle(t("Search TMDB"))
         self.setMinimumSize(650, 450)
         self.setModal(True)
 
@@ -83,16 +84,16 @@ class TMDBSearchDialog(QDialog):
         search_layout = QHBoxLayout()
 
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Search title...")
+        self.search_input.setPlaceholderText(t("Search title..."))
         self.search_input.setText(parsed_title)
         self.search_input.returnPressed.connect(self._do_search)
 
         self.type_combo = QComboBox()
-        self.type_combo.addItems(["TV Series", "Movie"])
+        self.type_combo.addItems([t("TV Series"), t("Movie")])
         if media_type == "movie":
             self.type_combo.setCurrentIndex(1)
 
-        self.search_btn = QPushButton("Search")
+        self.search_btn = QPushButton(t("Search"))
         self.search_btn.setObjectName("primaryButton")
         self.search_btn.clicked.connect(self._do_search)
 
@@ -111,7 +112,7 @@ class TMDBSearchDialog(QDialog):
         self.table = QTableWidget()
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(
-            ["Title", "Original Title", "Year", "TMDB ID"]
+            [t("Title"), t("Original Title"), t("Year"), t("TMDB ID")]
         )
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -136,10 +137,10 @@ class TMDBSearchDialog(QDialog):
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
 
-        cancel_btn = QPushButton("Cancel")
+        cancel_btn = QPushButton(t("Cancel"))
         cancel_btn.clicked.connect(self.reject)
 
-        self.select_btn = QPushButton("Select")
+        self.select_btn = QPushButton(t("Select"))
         self.select_btn.setObjectName("primaryButton")
         self.select_btn.setEnabled(False)
         self.select_btn.clicked.connect(self._on_select)
@@ -159,7 +160,7 @@ class TMDBSearchDialog(QDialog):
         media_type = "series" if self.type_combo.currentIndex() == 0 else "movie"
 
         self.search_btn.setEnabled(False)
-        self.status_label.setText("Searching...")
+        self.status_label.setText(t("Searching..."))
         self.status_label.setStyleSheet(f"color: {COLORS['text_muted']};")
         self.table.setRowCount(0)
         self._raw_results = []
@@ -181,11 +182,11 @@ class TMDBSearchDialog(QDialog):
         is_movie = self.type_combo.currentIndex() == 1
 
         if not results:
-            self.status_label.setText("No results found.")
+            self.status_label.setText(t("No results found."))
             self.status_label.setStyleSheet(f"color: {COLORS['warning']};")
             return
 
-        self.status_label.setText(f"Found {len(results)} result(s)")
+        self.status_label.setText(t("Found {n} result(s)").replace("{n}", str(len(results))))
         self.status_label.setStyleSheet(f"color: {COLORS['success']};")
 
         self.table.setRowCount(len(results))
@@ -210,7 +211,7 @@ class TMDBSearchDialog(QDialog):
 
     def _on_error(self, error_msg: str):
         self.search_btn.setEnabled(True)
-        self.status_label.setText(f"Error: {error_msg}")
+        self.status_label.setText(t("Error: {msg}").replace("{msg}", error_msg))
         self.status_label.setStyleSheet(f"color: {COLORS['error']};")
         self._cleanup_thread()
 

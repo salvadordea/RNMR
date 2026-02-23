@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
 )
 
 from .theme import COLORS
+from .i18n import t
 
 
 # Return codes
@@ -24,7 +25,7 @@ class MediaTypeDialog(QDialog):
     def __init__(self, info: dict, parent=None):
         super().__init__(parent)
 
-        self.setWindowTitle("Select Media Type")
+        self.setWindowTitle(t("Select Media Type"))
         self.setMinimumWidth(460)
         self.setModal(True)
 
@@ -35,7 +36,7 @@ class MediaTypeDialog(QDialog):
         layout.setSpacing(16)
 
         # Header
-        header = QLabel("What type of media is this?")
+        header = QLabel(t("What type of media is this?"))
         header.setStyleSheet(
             f"color: {COLORS['accent']}; font-size: 12pt; font-weight: bold;"
         )
@@ -76,18 +77,18 @@ class MediaTypeDialog(QDialog):
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(10)
 
-        series_btn = QPushButton("TV Series")
+        series_btn = QPushButton(t("TV Series"))
         series_btn.setObjectName("primaryButton")
         series_btn.clicked.connect(lambda: self.done(SERIES))
 
-        movie_btn = QPushButton("Movie")
+        movie_btn = QPushButton(t("Movie"))
         movie_btn.clicked.connect(lambda: self.done(MOVIE))
 
-        skip_btn = QPushButton("Skip")
+        skip_btn = QPushButton(t("Skip"))
         skip_btn.setToolTip("Skip this batch")
         skip_btn.clicked.connect(lambda: self.done(SKIP))
 
-        skip_all_btn = QPushButton("Skip All")
+        skip_all_btn = QPushButton(t("Skip All"))
         skip_all_btn.setToolTip(
             "Skip this batch and all future unresolved batches in this scan"
         )

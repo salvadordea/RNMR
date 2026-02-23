@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from renamer.id_mapping import parse_tmdb_url, IDMapping
 from renamer.tmdb import TMDBClient, TMDBError
 from .theme import COLORS
+from .i18n import t
 
 
 class SetIDDialog(QDialog):
@@ -26,7 +27,7 @@ class SetIDDialog(QDialog):
         self.result_type: str | None = None
         self.result_title: str | None = None
 
-        self.setWindowTitle("Set TMDB ID")
+        self.setWindowTitle(t("Set TMDB ID"))
         self.setMinimumWidth(450)
 
         self._setup_ui(current_type)
@@ -42,21 +43,21 @@ class SetIDDialog(QDialog):
         layout.addWidget(info_label)
 
         # Input group
-        input_group = QGroupBox("TMDB Identifier")
+        input_group = QGroupBox(t("TMDB Identifier"))
         input_layout = QFormLayout(input_group)
 
         # ID input
         self.id_input = QLineEdit()
-        self.id_input.setPlaceholderText("Enter TMDB ID, URL, or tv:12345 / movie:12345")
+        self.id_input.setPlaceholderText(t("Enter TMDB ID, URL, or tv:12345 / movie:12345"))
         self.id_input.textChanged.connect(self._on_input_changed)
-        input_layout.addRow("ID / URL:", self.id_input)
+        input_layout.addRow(t("ID / URL:"), self.id_input)
 
         # Media type
         self.type_combo = QComboBox()
-        self.type_combo.addItems(["TV Series", "Movie"])
+        self.type_combo.addItems([t("TV Series"), t("Movie")])
         if current_type == "movie":
             self.type_combo.setCurrentIndex(1)
-        input_layout.addRow("Type:", self.type_combo)
+        input_layout.addRow(t("Type:"), self.type_combo)
 
         layout.addWidget(input_group)
 
@@ -72,14 +73,14 @@ class SetIDDialog(QDialog):
         layout.addWidget(help_label)
 
         # Lookup result
-        self.result_group = QGroupBox("Lookup Result")
+        self.result_group = QGroupBox(t("Lookup Result"))
         result_layout = QVBoxLayout(self.result_group)
 
-        self.result_label = QLabel("Enter an ID to verify...")
+        self.result_label = QLabel(t("Enter an ID to verify..."))
         self.result_label.setWordWrap(True)
         result_layout.addWidget(self.result_label)
 
-        self.lookup_btn = QPushButton("Verify ID")
+        self.lookup_btn = QPushButton(t("Verify ID"))
         self.lookup_btn.clicked.connect(self._lookup_id)
         result_layout.addWidget(self.lookup_btn)
 
@@ -89,10 +90,10 @@ class SetIDDialog(QDialog):
         button_layout = QHBoxLayout()
         button_layout.addStretch()
 
-        cancel_btn = QPushButton("Cancel")
+        cancel_btn = QPushButton(t("Cancel"))
         cancel_btn.clicked.connect(self.reject)
 
-        self.save_btn = QPushButton("Save")
+        self.save_btn = QPushButton(t("Save"))
         self.save_btn.setObjectName("primaryButton")
         self.save_btn.clicked.connect(self._save)
         self.save_btn.setEnabled(False)
@@ -111,7 +112,7 @@ class SetIDDialog(QDialog):
             self.type_combo.setCurrentIndex(0 if media_type == "series" else 1)
 
         # Reset verification
-        self.result_label.setText("Enter an ID to verify...")
+        self.result_label.setText(t("Enter an ID to verify..."))
         self.result_label.setStyleSheet("")
         self.save_btn.setEnabled(False)
         self.result_id = None
@@ -127,7 +128,7 @@ class SetIDDialog(QDialog):
         tmdb_id, media_type = parse_tmdb_url(text)
 
         if tmdb_id is None:
-            self.result_label.setText("Invalid ID format")
+            self.result_label.setText(t("Invalid ID format"))
             self.result_label.setStyleSheet(f"color: {COLORS['error']};")
             return
 
@@ -135,7 +136,7 @@ class SetIDDialog(QDialog):
         if media_type is None:
             media_type = "series" if self.type_combo.currentIndex() == 0 else "movie"
 
-        self.result_label.setText("Looking up...")
+        self.result_label.setText(t("Looking up..."))
 
         try:
             client = TMDBClient(verbose=False)

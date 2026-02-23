@@ -15,6 +15,7 @@ from .settings import (
     DEFAULT_SETTINGS,
 )
 from .theme import COLORS
+from .i18n import SUPPORTED_LANGUAGES, t
 
 
 class SettingsDialog(QDialog):
@@ -25,7 +26,7 @@ class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self.setWindowTitle("Settings")
+        self.setWindowTitle(t("Settings"))
         self.setMinimumWidth(550)
         self.setMinimumHeight(520)
 
@@ -44,22 +45,22 @@ class SettingsDialog(QDialog):
         layout.setSpacing(16)
 
         tabs = QTabWidget()
-        tabs.addTab(self._create_general_tab(), "General")
-        tabs.addTab(self._create_tmdb_tab(), "TMDB")
-        tabs.addTab(self._create_behavior_tab(), "Behavior")
+        tabs.addTab(self._create_general_tab(), t("General"))
+        tabs.addTab(self._create_tmdb_tab(), t("TMDB"))
+        tabs.addTab(self._create_behavior_tab(), t("Behavior"))
         layout.addWidget(tabs)
 
         # Bottom buttons
         button_layout = QHBoxLayout()
         button_layout.addStretch()
 
-        reset_btn = QPushButton("Reset to Defaults")
+        reset_btn = QPushButton(t("Reset to Defaults"))
         reset_btn.clicked.connect(self._reset_defaults)
 
-        cancel_btn = QPushButton("Cancel")
+        cancel_btn = QPushButton(t("Cancel"))
         cancel_btn.clicked.connect(self.reject)
 
-        save_btn = QPushButton("Save")
+        save_btn = QPushButton(t("Save"))
         save_btn.setObjectName("primaryButton")
         save_btn.clicked.connect(self._save_and_close)
 
@@ -76,8 +77,21 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(widget)
         layout.setSpacing(12)
 
+        # ---- App language ----
+        app_group = QGroupBox(t("App Language"))
+        app_form = QFormLayout(app_group)
+        self.app_lang_combo = QComboBox()
+        for code, label in SUPPORTED_LANGUAGES.items():
+            self.app_lang_combo.addItem(label, code)
+        app_form.addRow(t("Language") + ":", self.app_lang_combo)
+        app_note = QLabel(t("Restart the app to apply language changes everywhere."))
+        app_note.setWordWrap(True)
+        app_note.setStyleSheet(f"color: {COLORS['text_muted']};")
+        app_form.addRow("", app_note)
+        layout.addWidget(app_group)
+
         # ---- Series section ----
-        series_group = QGroupBox("Series Naming")
+        series_group = QGroupBox(t("Series Naming"))
         series_layout = QVBoxLayout(series_group)
 
         preset_form = QFormLayout()
@@ -86,11 +100,11 @@ class SettingsDialog(QDialog):
         self.series_preset_combo.currentTextChanged.connect(
             self._on_series_preset_changed
         )
-        preset_form.addRow("Preset:", self.series_preset_combo)
+        preset_form.addRow(t("Preset:"), self.series_preset_combo)
         series_layout.addLayout(preset_form)
 
         self.series_template_edit = QLineEdit()
-        self.series_template_edit.setPlaceholderText("Enter custom template...")
+        self.series_template_edit.setPlaceholderText(t("Enter custom template..."))
         self.series_template_edit.textChanged.connect(self._update_series_preview)
         series_layout.addWidget(self.series_template_edit)
 
@@ -108,7 +122,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(series_group)
 
         # ---- Movie section ----
-        movie_group = QGroupBox("Movie Naming")
+        movie_group = QGroupBox(t("Movie Naming"))
         movie_layout = QVBoxLayout(movie_group)
 
         preset_form2 = QFormLayout()
@@ -117,11 +131,11 @@ class SettingsDialog(QDialog):
         self.movie_preset_combo.currentTextChanged.connect(
             self._on_movie_preset_changed
         )
-        preset_form2.addRow("Preset:", self.movie_preset_combo)
+        preset_form2.addRow(t("Preset:"), self.movie_preset_combo)
         movie_layout.addLayout(preset_form2)
 
         self.movie_template_edit = QLineEdit()
-        self.movie_template_edit.setPlaceholderText("Enter custom template...")
+        self.movie_template_edit.setPlaceholderText(t("Enter custom template..."))
         self.movie_template_edit.textChanged.connect(self._update_movie_preview)
         movie_layout.addWidget(self.movie_template_edit)
 
@@ -139,7 +153,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(movie_group)
 
         # ---- Template variables reference ----
-        help_group = QGroupBox("Available Variables")
+        help_group = QGroupBox(t("Available Variables"))
         help_layout = QVBoxLayout(help_group)
         help_text = QTextEdit()
         help_text.setReadOnly(True)
@@ -174,17 +188,17 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(widget)
         layout.setSpacing(12)
 
-        group = QGroupBox("TMDB Configuration")
+        group = QGroupBox(t("TMDB Configuration"))
         form = QFormLayout(group)
         form.setSpacing(12)
 
         self.api_key_edit = QLineEdit()
-        self.api_key_edit.setPlaceholderText("Enter your TMDB API key...")
+        self.api_key_edit.setPlaceholderText(t("Enter your TMDB API key..."))
         self.api_key_edit.setEchoMode(QLineEdit.Password)
-        form.addRow("API Key:", self.api_key_edit)
+        form.addRow(t("API Key:"), self.api_key_edit)
 
         # Toggle visibility
-        show_btn = QPushButton("Show")
+        show_btn = QPushButton(t("Show"))
         show_btn.setCheckable(True)
         show_btn.toggled.connect(
             lambda checked: self.api_key_edit.setEchoMode(
@@ -192,19 +206,19 @@ class SettingsDialog(QDialog):
             )
         )
         show_btn.toggled.connect(
-            lambda checked: show_btn.setText("Hide" if checked else "Show")
+            lambda checked: show_btn.setText(t("Hide") if checked else t("Show"))
         )
         form.addRow("", show_btn)
 
         # Key action buttons
         key_btn_layout = QHBoxLayout()
-        remove_key_btn = QPushButton("Remove API Key")
-        remove_key_btn.setToolTip("Clear the stored API key")
+        remove_key_btn = QPushButton(t("Remove API Key"))
+        remove_key_btn.setToolTip(t("Clear the stored API key"))
         remove_key_btn.clicked.connect(self._remove_api_key)
         key_btn_layout.addWidget(remove_key_btn)
 
-        dashboard_btn = QPushButton("Open TMDB Dashboard")
-        dashboard_btn.setToolTip("Open your TMDB API settings in a browser")
+        dashboard_btn = QPushButton(t("Open TMDB Dashboard"))
+        dashboard_btn.setToolTip(t("Open your TMDB API settings in a browser"))
         dashboard_btn.clicked.connect(self._open_tmdb_dashboard)
         key_btn_layout.addWidget(dashboard_btn)
 
@@ -213,7 +227,7 @@ class SettingsDialog(QDialog):
 
         self.language_edit = QLineEdit()
         self.language_edit.setPlaceholderText("en-US")
-        form.addRow("Language:", self.language_edit)
+        form.addRow(t("Language:") , self.language_edit)
 
         layout.addWidget(group)
 
@@ -264,31 +278,31 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(widget)
         layout.setSpacing(12)
 
-        group = QGroupBox("Rename Behavior")
+        group = QGroupBox(t("Rename Behavior"))
         form = QVBoxLayout(group)
         form.setSpacing(14)
 
-        self.overwrite_cb = QCheckBox("Ask before overwriting files")
+        self.overwrite_cb = QCheckBox(t("Ask before overwriting files"))
         self.overwrite_cb.setToolTip(
             "Show a confirmation dialog when a destination file already exists."
         )
         form.addWidget(self.overwrite_cb)
 
-        self.interactive_cb = QCheckBox("Enable manual search fallback")
+        self.interactive_cb = QCheckBox(t("Enable manual search fallback"))
         self.interactive_cb.setToolTip(
             "When automatic TMDB detection fails, show a search dialog "
             "so you can find the correct title manually."
         )
         form.addWidget(self.interactive_cb)
 
-        self.confirm_tmdb_cb = QCheckBox("Always confirm TMDB match")
+        self.confirm_tmdb_cb = QCheckBox(t("Always confirm TMDB match"))
         self.confirm_tmdb_cb.setToolTip(
             "Show a selection dialog with the top TMDB results before "
             "committing to a match, even when confidence is high."
         )
         form.addWidget(self.confirm_tmdb_cb)
 
-        self.ask_media_type_cb = QCheckBox("Always ask media type before search")
+        self.ask_media_type_cb = QCheckBox(t("Always ask media type before search"))
         self.ask_media_type_cb.setToolTip(
             "Before searching TMDB, show a dialog to confirm whether "
             "each title group is a TV series or movie."
@@ -298,7 +312,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(group)
 
         # -- Episode Title Language --
-        ep_group = QGroupBox("Episode Title Language")
+        ep_group = QGroupBox(t("Episode Title Language"))
         ep_layout = QVBoxLayout(ep_group)
         ep_layout.setSpacing(14)
 
@@ -306,16 +320,16 @@ class SettingsDialog(QDialog):
         ep_form.setSpacing(10)
 
         self.ep_lang_combo = QComboBox()
-        self.ep_lang_combo.addItem("Same as metadata language", "same")
-        self.ep_lang_combo.addItem("Original language", "original")
-        self.ep_lang_combo.addItem("English (forced)", "en")
+        self.ep_lang_combo.addItem(t("Same as metadata language"), "same")
+        self.ep_lang_combo.addItem(t("Original language"), "original")
+        self.ep_lang_combo.addItem(t("English (forced)"), "en")
         self.ep_lang_combo.setToolTip(
             "Controls the language used when fetching episode titles from TMDB."
         )
-        ep_form.addRow("Mode:", self.ep_lang_combo)
+        ep_form.addRow(t("Mode:"), self.ep_lang_combo)
         ep_layout.addLayout(ep_form)
 
-        self.force_english_cb = QCheckBox("Force episode titles to English")
+        self.force_english_cb = QCheckBox(t("Force episode titles to English"))
         self.force_english_cb.setToolTip(
             "Override the episode title language to English regardless "
             "of the mode above. Useful for anime and foreign-language series."
@@ -337,6 +351,12 @@ class SettingsDialog(QDialog):
     # ------------------------------------------------------------------
 
     def _load_current_settings(self):
+        # App language
+        app_lang = self.mgr.get("app_language", "en")
+        idx = self.app_lang_combo.findData(app_lang)
+        if idx >= 0:
+            self.app_lang_combo.setCurrentIndex(idx)
+
         # General - series
         idx = self.series_preset_combo.findText(
             self.mgr.get("series_preset", "Standard")
@@ -377,6 +397,9 @@ class SettingsDialog(QDialog):
         self.ep_lang_combo.setEnabled(not force_en)
 
     def _save_and_close(self):
+        old_lang = self.mgr.get("app_language", "en")
+        new_lang = self.app_lang_combo.currentData() or "en"
+
         series_template = self.series_template_edit.text()
         movie_template = self.movie_template_edit.text()
 
@@ -399,6 +422,7 @@ class SettingsDialog(QDialog):
         # Persist everything through SettingsManager
         self.mgr.set("series_template", series_template)
         self.mgr.set("movie_template", movie_template)
+        self.mgr.set("app_language", new_lang)
         self.mgr.set("series_preset", self.series_preset_combo.currentText())
         self.mgr.set("movie_preset", self.movie_preset_combo.currentText())
         self.mgr.set("tmdb_api_key", self.api_key_edit.text().strip())
@@ -418,6 +442,12 @@ class SettingsDialog(QDialog):
 
         if self.mgr.save():
             self.settings_changed.emit()
+            if old_lang != new_lang:
+                QMessageBox.information(
+                    self,
+                    t("App Language"),
+                    t("Restart the app to apply language changes everywhere."),
+                )
             self.accept()
         else:
             QMessageBox.warning(
@@ -425,6 +455,9 @@ class SettingsDialog(QDialog):
             )
 
     def _reset_defaults(self):
+        idx_lang = self.app_lang_combo.findData(DEFAULT_SETTINGS["app_language"])
+        if idx_lang >= 0:
+            self.app_lang_combo.setCurrentIndex(idx_lang)
         self.series_preset_combo.setCurrentText("Standard")
         self.series_template_edit.setText(DEFAULT_SERIES_TEMPLATE)
         self.movie_preset_combo.setCurrentText("Standard")
@@ -519,3 +552,4 @@ class SettingsDialog(QDialog):
             self.movie_validation_label.setStyleSheet(
                 f"color: {COLORS['error']};"
             )
+

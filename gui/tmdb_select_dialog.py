@@ -8,6 +8,7 @@ from PySide6.QtGui import QPixmap, QImage
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 
 from .theme import COLORS
+from .i18n import t
 
 
 # Dialog result codes
@@ -94,7 +95,7 @@ class _ResultCard(QFrame):
             f"color: {COLORS['text_muted']};"
             "font-size: 9pt;"
         )
-        self.poster_label.setText("Film")
+        self.poster_label.setText(t("Film"))
         layout.addWidget(self.poster_label)
 
         # Text info
@@ -104,7 +105,7 @@ class _ResultCard(QFrame):
         title_field = "title" if self._is_movie else "name"
         date_field = "release_date" if self._is_movie else "first_air_date"
 
-        title_text = self.result.get(title_field, "Unknown")
+        title_text = self.result.get(title_field, t("Unknown"))
         date_text = self.result.get(date_field, "")
         year_text = date_text[:4] if date_text and len(date_text) >= 4 else ""
         tmdb_id = self.result.get("id", "")
@@ -199,7 +200,7 @@ class TMDBSelectDialog(QDialog):
         parent=None,
     ):
         super().__init__(parent)
-        self.setWindowTitle("Select TMDB Match")
+        self.setWindowTitle(t("Select TMDB Match"))
         self.setMinimumWidth(540)
         self.setMinimumHeight(420)
         self.setModal(True)
@@ -250,21 +251,21 @@ class TMDBSelectDialog(QDialog):
         search_layout.setSpacing(8)
 
         self._search_input = QLineEdit()
-        self._search_input.setPlaceholderText("Search TMDB...")
+        self._search_input.setPlaceholderText(t("Search TMDB..."))
         self._search_input.setText(self._parsed_title)
         self._search_input.setMinimumHeight(32)
         self._search_input.returnPressed.connect(self._on_search)
         search_layout.addWidget(self._search_input, stretch=1)
 
         self._type_combo = QComboBox()
-        self._type_combo.addItem("TV Series", "series")
-        self._type_combo.addItem("Movie", "movie")
+        self._type_combo.addItem(t("TV Series"), "series")
+        self._type_combo.addItem(t("Movie"), "movie")
         self._type_combo.setCurrentIndex(0 if not self._is_movie else 1)
         self._type_combo.setMinimumHeight(32)
         self._type_combo.setMinimumWidth(100)
         search_layout.addWidget(self._type_combo)
 
-        self._search_btn = QPushButton("Search")
+        self._search_btn = QPushButton(t("Search"))
         self._search_btn.setObjectName("primaryButton")
         self._search_btn.setMinimumHeight(32)
         self._search_btn.clicked.connect(self._on_search)
@@ -273,7 +274,7 @@ class TMDBSelectDialog(QDialog):
         layout.addLayout(search_layout)
 
         # Loading indicator
-        self._loading_label = QLabel("Searching...")
+        self._loading_label = QLabel(t("Searching..."))
         self._loading_label.setAlignment(Qt.AlignCenter)
         self._loading_label.setStyleSheet(
             f"color: {COLORS['accent']}; font-style: italic; padding: 4px;"
@@ -297,7 +298,7 @@ class TMDBSelectDialog(QDialog):
         layout.addWidget(self._scroll, stretch=1)
 
         # No results message (hidden by default)
-        self._no_results_label = QLabel("No matches found.")
+        self._no_results_label = QLabel(t("No matches found."))
         self._no_results_label.setAlignment(Qt.AlignCenter)
         self._no_results_label.setStyleSheet(
             f"color: {COLORS['text_muted']}; font-size: 11pt; padding: 20px;"
@@ -309,15 +310,15 @@ class TMDBSelectDialog(QDialog):
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(10)
 
-        self._confirm_btn = QPushButton("Confirm Selection")
+        self._confirm_btn = QPushButton(t("Confirm Selection"))
         self._confirm_btn.setObjectName("primaryButton")
         self._confirm_btn.clicked.connect(self.accept)
 
-        skip_btn = QPushButton("Skip")
+        skip_btn = QPushButton(t("Skip"))
         skip_btn.setToolTip("Skip this batch")
         skip_btn.clicked.connect(lambda: self.done(SKIP))
 
-        skip_all_btn = QPushButton("Skip All")
+        skip_all_btn = QPushButton(t("Skip All"))
         skip_all_btn.setToolTip(
             "Skip this batch and all remaining unresolved batches"
         )
