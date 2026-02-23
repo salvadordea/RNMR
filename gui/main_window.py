@@ -593,6 +593,18 @@ class MainWindow(QMainWindow):
         self.status_label = QLabel(t("Ready"))
         self.status_label.setObjectName("mutedLabel")
 
+        # Version + support link (subtle)
+        self.version_label = QLabel("v1.3.0")
+        self.version_label.setStyleSheet(f"color: {COLORS['text_muted']};")
+
+        self.support_link = QLabel(
+            f"<a href='#' style='color:{COLORS['accent']}; text-decoration:none;'>"
+            f"{t('Support RNMR')}</a>"
+        )
+        self.support_link.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        self.support_link.setOpenExternalLinks(False)
+        self.support_link.linkActivated.connect(lambda _link: self._show_support())
+
         # Progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
@@ -612,6 +624,8 @@ class MainWindow(QMainWindow):
         self.rename_btn.setEnabled(False)
 
         layout.addWidget(self.status_label)
+        layout.addWidget(self.version_label)
+        layout.addWidget(self.support_link)
         layout.addWidget(self.progress_bar, stretch=1)
         layout.addWidget(self.undo_btn)
         layout.addWidget(self.rename_btn)

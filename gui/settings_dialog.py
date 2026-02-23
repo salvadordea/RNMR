@@ -15,6 +15,7 @@ from .settings import (
     DEFAULT_SETTINGS,
 )
 from .theme import COLORS
+from .support_dialog import SupportDialog
 from .i18n import SUPPORTED_LANGUAGES, t
 
 
@@ -178,6 +179,21 @@ class SettingsDialog(QDialog):
         help_layout.addWidget(help_text)
         layout.addWidget(help_group)
 
+        # ---- Support section ----
+        support_group = QGroupBox(t("Support RNMR"))
+        support_layout = QVBoxLayout(support_group)
+        support_text = QLabel(
+            t("If you find RNMR useful, consider supporting its development.")
+        )
+        support_text.setWordWrap(True)
+        support_text.setStyleSheet(f"color: {COLORS['text_muted']};")
+        support_layout.addWidget(support_text)
+
+        support_btn = QPushButton(t("Support RNMR..."))
+        support_btn.clicked.connect(self._show_support_dialog)
+        support_layout.addWidget(support_btn)
+        layout.addWidget(support_group)
+
         layout.addStretch()
         return widget
 
@@ -270,6 +286,11 @@ class SettingsDialog(QDialog):
         QDesktopServices.openUrl(
             QUrl("https://www.themoviedb.org/settings/api")
         )
+
+    def _show_support_dialog(self):
+        """Open the support dialog from settings."""
+        dlg = SupportDialog(self)
+        dlg.exec()
 
     # -- Behavior tab --------------------------------------------------
 

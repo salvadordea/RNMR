@@ -179,8 +179,11 @@ _ES_FALLBACK: dict[str, str] = {
     "Please enter an API key.": "Ingresa una API key.",
     "Validating...": "Validando...",
     "Support RNMR": "Apoyar RNMR",
+    "If you find RNMR useful, consider supporting its development.": (
+        "Si RNMR te es util, considera apoyar su desarrollo."
+    ),
     "BUY ME A COFFEE": "INVITAME UN CAFE",
-    "USDT -- TRC20 Network": "USDT -- Red TRC20",
+    "USDT (TRC20 Network)": "USDT (Red TRC20)",
     "Copy": "Copiar",
     "Copied": "Copiado",
     "TMDB Lookup Failed": "Fallo de Busqueda TMDB",
