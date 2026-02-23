@@ -15,8 +15,6 @@ Notes:
 
 import os
 
-from PyInstaller.utils.hooks import collect_all
-
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -25,16 +23,10 @@ SPEC_DIR = os.path.abspath(SPECPATH)
 RESOURCES_DIR = os.path.join(SPEC_DIR, "resources")
 
 # ---------------------------------------------------------------------------
-# Collect PySide6 -- datas, binaries, AND hidden imports
-# ---------------------------------------------------------------------------
-
-pyside6_datas, pyside6_binaries, pyside6_hiddenimports = collect_all("PySide6")
-
-# ---------------------------------------------------------------------------
 # Data files
 # ---------------------------------------------------------------------------
 
-datas = list(pyside6_datas)
+datas = []
 
 # Bundle the resources directory (icons, etc.)
 if os.path.isdir(RESOURCES_DIR):
@@ -49,7 +41,7 @@ if os.path.isfile(_license_ffmpeg):
 # Binaries
 # ---------------------------------------------------------------------------
 
-binaries = list(pyside6_binaries)
+binaries = []
 
 # Bundle ffprobe.exe as a binary in resources/ (if present)
 _ffprobe = os.path.join(RESOURCES_DIR, "ffprobe.exe")
@@ -60,10 +52,12 @@ if os.path.isfile(_ffprobe):
 # Hidden imports
 # ---------------------------------------------------------------------------
 
-hiddenimports = list(pyside6_hiddenimports) + [
+hiddenimports = [
+    # Keep Qt modules explicit to avoid pulling in the entire Qt stack.
     "PySide6.QtCore",
     "PySide6.QtGui",
     "PySide6.QtWidgets",
+    "PySide6.QtNetwork",
     # Third-party
     "requests",
     "urllib3",

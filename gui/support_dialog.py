@@ -39,8 +39,7 @@ class SupportDialog(QDialog):
 
         # Description
         desc = QLabel(
-            "RNMR is free and open source. If it saves you time,\n"
-            "consider supporting its continued development."
+            "If you find RNMR useful and would like to support its development:"
         )
         desc.setWordWrap(True)
         desc.setAlignment(Qt.AlignCenter)
@@ -70,7 +69,7 @@ class SupportDialog(QDialog):
         layout.addSpacing(8)
 
         # Crypto section
-        network_label = QLabel(t("USDT -- TRC20 Network"))
+        network_label = QLabel(t("USDT (TRC20 Network)"))
         network_label.setStyleSheet(
             f"color: {COLORS['text_muted']}; font-size: 9pt;"
             "font-weight: bold; text-transform: uppercase; letter-spacing: 1px;"
@@ -104,7 +103,7 @@ class SupportDialog(QDialog):
 
         # Notice
         notice = QLabel(
-            "Please use the TRC20 network when sending USDT.\n"
+            "Please make sure to use the TRC20 network when sending USDT.\n"
             "Crypto transactions are non-refundable."
         )
         notice.setWordWrap(True)

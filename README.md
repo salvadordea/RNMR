@@ -48,9 +48,10 @@ pip install -r requirements.txt
 
 ## Configuration
 
-Set your TMDB API key using one of these methods:
+Set your TMDB API key using one of these methods for the CLI. The GUI
+requires a key stored in `Edit > Settings > TMDB`.
 
-### Option 1: Environment Variable
+### Option 1: Environment Variable (CLI)
 
 ```bash
 # Linux/macOS
@@ -63,7 +64,7 @@ $env:TMDB_API_KEY="your_key_here"
 set TMDB_API_KEY=your_key_here
 ```
 
-### Option 2: .env File
+### Option 2: .env File (CLI)
 
 Create a `.env` file in your current directory or home directory:
 
@@ -376,6 +377,8 @@ scripts/
 ## Support RNMR
 
 If you find RNMR useful and would like to support its development:
+
+You can also access this in-app via `Help > Support RNMR...`.
 
 **Buy Me a Coffee**
 

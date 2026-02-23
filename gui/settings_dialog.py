@@ -236,7 +236,7 @@ class SettingsDialog(QDialog):
             "<a href='https://www.themoviedb.org/settings/api' "
             "style='color:" + COLORS["accent"] + ";'>"
             "themoviedb.org/settings/api</a>.<br>"
-            "If left blank, the TMDB_API_KEY environment variable is used."
+            "A valid TMDB API key is required to use TMDB features in RNMR."
         )
         help_label.setOpenExternalLinks(True)
         help_label.setWordWrap(True)
