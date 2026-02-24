@@ -39,7 +39,7 @@ class SupportDialog(QDialog):
 
         # Description
         desc = QLabel(
-            "If you find RNMR useful and would like to support its development:"
+            t("If you find RNMR useful and would like to support its development:")
         )
         desc.setWordWrap(True)
         desc.setAlignment(Qt.AlignCenter)
@@ -54,7 +54,7 @@ class SupportDialog(QDialog):
         )
         layout.addWidget(bmac_label)
 
-        bmac_btn = QPushButton("buymeacoffee.com/rnmr")
+        bmac_btn = QPushButton(t("buymeacoffee.com/rnmr"))
         bmac_btn.setStyleSheet(
             "background-color: #FFDD00; color: #000; font-weight: 600;"
             "border: none; border-radius: 6px; padding: 10px 16px;"
@@ -103,8 +103,8 @@ class SupportDialog(QDialog):
 
         # Notice
         notice = QLabel(
-            "Please make sure to use the TRC20 network when sending USDT.\n"
-            "Crypto transactions are non-refundable."
+            t("Please make sure to use the TRC20 network when sending USDT.") + "\n"
+            + t("Crypto transactions are non-refundable.")
         )
         notice.setWordWrap(True)
         notice.setStyleSheet(

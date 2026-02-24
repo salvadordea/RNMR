@@ -179,11 +179,18 @@ _ES_FALLBACK: dict[str, str] = {
     "Please enter an API key.": "Ingresa una API key.",
     "Validating...": "Validando...",
     "Support RNMR": "Apoyar RNMR",
-    "If you find RNMR useful, consider supporting its development.": (
-        "Si RNMR te es util, considera apoyar su desarrollo."
+    "If you find RNMR useful and would like to support its development:": (
+        "Si RNMR te es util y quieres apoyar su desarrollo:"
     ),
+    "buymeacoffee.com/rnmr": "buymeacoffee.com/rnmr",
     "BUY ME A COFFEE": "INVITAME UN CAFE",
     "USDT (TRC20 Network)": "USDT (Red TRC20)",
+    "Please make sure to use the TRC20 network when sending USDT.": (
+        "Asegurate de usar la red TRC20 al enviar USDT."
+    ),
+    "Crypto transactions are non-refundable.": (
+        "Las transacciones con criptomonedas no son reembolsables."
+    ),
     "Copy": "Copiar",
     "Copied": "Copiado",
     "TMDB Lookup Failed": "Fallo de Busqueda TMDB",
