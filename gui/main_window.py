@@ -287,7 +287,7 @@ class MainWindow(QMainWindow):
             self,
             "About RNMR",
             "<h3>RNMR - Media File Renamer</h3>"
-            "<p>Version 0.9.1</p>"
+            "<p>Version 0.9.2</p>"
             "<p>A tool for renaming media files using TMDB metadata.</p>"
             "<p>Features:</p>"
             "<ul>"
@@ -602,7 +602,7 @@ class MainWindow(QMainWindow):
         self.status_label.setObjectName("mutedLabel")
 
         # Version + support link (subtle)
-        self.version_label = QLabel("v0.9.1")
+        self.version_label = QLabel("v0.9.2")
         self.version_label.setStyleSheet(f"color: {COLORS['text_muted']};")
 
         self.support_link = QLabel(
