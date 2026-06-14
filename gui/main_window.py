@@ -122,7 +122,14 @@ class MetadataDialog(QDialog):
 class MainWindow(QMainWindow):
     """Main application window."""
 
-    def __init__(self):
+    def __init__(self, skip_setup: bool = False):
+        """Create the main window.
+
+        Args:
+            skip_setup: When True, do not show the first-run setup wizard.
+                Used by automated/headless tests where a blocking modal
+                dialog would hang. Production code leaves this False.
+        """
         super().__init__()
 
         self.setWindowTitle(t("RNMR - Media File Renamer"))
@@ -150,7 +157,8 @@ class MainWindow(QMainWindow):
         self._setup_ui()
 
         # First-run setup wizard (after UI is built so badge can update)
-        self._check_api_key_on_startup()
+        if not skip_setup:
+            self._check_api_key_on_startup()
 
     def _has_api_key(self) -> bool:
         """Return True if a TMDB API key is configured (settings or env)."""

@@ -464,6 +464,9 @@ class ScanWorker(QObject):
         is the main reason large series scans used to take "forever".
         """
         ep_language = self._resolve_episode_language(ctx)
+        # The cache is language-aware, so resolve the effective tag the
+        # same way the TMDB client does (None -> client default).
+        effective_language = ep_language or tmdb_client.language
 
         # Collect needed episode numbers grouped by season.
         needed: dict[int, set[int]] = {}
@@ -483,6 +486,7 @@ class ScanWorker(QObject):
             for ep_num in wanted:
                 cached = tmdb_client.cache.get_episode(
                     ctx.series.id, season, ep_num,
+                    language=effective_language,
                 )
                 if cached:
                     ctx.episode_cache[(season, ep_num)] = TMDBEpisode(

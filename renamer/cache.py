@@ -132,7 +132,23 @@ class Cache:
         self._cache["series_searches"][key] = result
         self._save()
 
-    def get_episode(self, series_id: int, season: int, episode: int) -> dict | None:
+    @staticmethod
+    def _episode_key(
+        series_id: int, season: int, episode: int, language: str | None,
+    ) -> str:
+        """Build the episode cache key, namespaced by language.
+
+        Episode titles/overviews are language-dependent, so the cache must
+        not return a title fetched in one language when another is active.
+        Legacy (language-less) entries simply miss and get re-fetched once.
+        """
+        base = f"{series_id}:s{season}e{episode}"
+        return f"{base}:{language}" if language else base
+
+    def get_episode(
+        self, series_id: int, season: int, episode: int,
+        language: str | None = None,
+    ) -> dict | None:
         """
         Get cached episode details.
 
@@ -140,16 +156,17 @@ class Cache:
             series_id: TMDB series ID
             season: Season number
             episode: Episode number
+            language: Language tag the episode was fetched in (e.g. "en-US").
 
         Returns:
             Cached episode data if found, None otherwise
         """
-        key = f"{series_id}:s{season}e{episode}"
+        key = self._episode_key(series_id, season, episode, language)
         return self._cache["episodes"].get(key)
 
     def set_episode(
         self, series_id: int, season: int, episode: int, result: dict,
-        save: bool = True,
+        save: bool = True, language: str | None = None,
     ) -> None:
         """
         Cache episode details.
@@ -162,8 +179,9 @@ class Cache:
             save: Persist to disk immediately. Pass ``False`` when writing
                   many episodes in a loop and call ``flush()`` once at the
                   end to avoid rewriting the whole cache file per episode.
+            language: Language tag the episode was fetched in (e.g. "en-US").
         """
-        key = f"{series_id}:s{season}e{episode}"
+        key = self._episode_key(series_id, season, episode, language)
         self._cache["episodes"][key] = result
         if save:
             self._save()

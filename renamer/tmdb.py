@@ -583,10 +583,9 @@ class TMDBClient:
             Mapping of ``episode_number -> TMDBEpisode`` (empty on failure).
         """
         endpoint = f"/tv/{series_id}/season/{season}"
-        params = {}
-        if language:
-            params["language"] = language
-        data = self._request(endpoint, params=params or None)
+        effective_language = language or self.language
+        params = {"language": effective_language}
+        data = self._request(endpoint, params=params)
 
         episodes: dict[int, TMDBEpisode] = {}
         if not data or not data.get("episodes"):
@@ -611,7 +610,7 @@ class TMDBClient:
                 "episode_number": ep.episode_number,
                 "name": ep.name,
                 "overview": ep.overview,
-            }, save=False)
+            }, save=False, language=effective_language)
 
         self.cache.flush()
         return episodes
@@ -636,8 +635,12 @@ class TMDBClient:
         Returns:
             TMDBEpisode if found, None otherwise
         """
-        # Check cache first
-        cached = self.cache.get_episode(series_id, season, episode)
+        effective_language = language or self.language
+
+        # Check cache first (language-aware)
+        cached = self.cache.get_episode(
+            series_id, season, episode, language=effective_language,
+        )
         if cached:
             return TMDBEpisode(
                 series_id=cached["series_id"],
@@ -649,10 +652,7 @@ class TMDBClient:
 
         # Fetch from TMDB
         endpoint = f"/tv/{series_id}/season/{season}/episode/{episode}"
-        params = {}
-        if language:
-            params["language"] = language
-        data = self._request(endpoint, params=params or None)
+        data = self._request(endpoint, params={"language": effective_language})
         if not data:
             return None
 
@@ -664,13 +664,13 @@ class TMDBClient:
             overview=data.get("overview", "")
         )
 
-        # Cache result
+        # Cache result (language-aware)
         self.cache.set_episode(series_id, season, episode, {
             "series_id": ep.series_id,
             "season_number": ep.season_number,
             "episode_number": ep.episode_number,
             "name": ep.name,
             "overview": ep.overview
-        })
+        }, language=effective_language)
 
         return ep
