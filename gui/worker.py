@@ -197,7 +197,7 @@ class ScanWorker(QObject):
 
                 self.progress.emit(i + 1, len(parsed_files))
 
-                group_key = self._group_key(parsed.raw_name)
+                group_key = self._group_key(parsed)
                 ctx = batch_contexts.get(group_key)
 
                 try:
@@ -250,32 +250,25 @@ class ScanWorker(QObject):
     # Title normalisation and grouping
     # ------------------------------------------------------------------
 
-    # Episode-pattern anchors (same patterns the parser uses)
-    _EP_ANCHOR = re.compile(
-        r'[sS]\d{1,2}[eE]\d{1,2}'
-        r'|\b\d{1,2}x\d{1,2}\b'
-        r'|[sS]eason\s*\d{1,2}\s*[eE]pisode\s*\d{1,2}'
-    )
-
     @staticmethod
-    def _group_key(raw_name: str) -> str:
-        """Derive a grouping key from the raw filename stem.
+    def _group_key(parsed: Any) -> str:
+        """Derive a grouping key from a parsed file.
 
-        Takes only the text BEFORE the episode pattern so that episode
-        titles (which vary per file) are excluded.  Falls back to the
-        full normalised stem for movies (no episode pattern).
+        Uses the parser's ``title_guess``, which already has the episode
+        pattern, year, and quality/codec/release noise stripped out.  This
+        ensures every episode of a series collapses into ONE group (so the
+        user is asked to identify the series exactly once) even when the
+        filenames are inconsistent -- e.g. some include a year or a
+        ``1080p`` tag before ``SxxExx`` and others don't.
+
+        Movies keep their year in the key so that two different films with
+        the same title (e.g. a remake) are not merged.
         """
-        # Normalise separators (dots / underscores -> spaces)
-        name = re.sub(r'[._]', ' ', raw_name)
-        name = re.sub(r'--+', ' ', name)
-
-        m = ScanWorker._EP_ANCHOR.search(name)
-        if m:
-            name = name[:m.start()]
-
-        # Strip symbols, collapse whitespace, lowercase
-        name = re.sub(r'[^\w\s]', ' ', name.lower())
-        return re.sub(r'\s+', ' ', name).strip()
+        title = re.sub(r'[^\w\s]', ' ', (parsed.title_guess or '').lower())
+        title = re.sub(r'\s+', ' ', title).strip()
+        if parsed.media_type == "movie" and parsed.year:
+            return f"{title} ({parsed.year})"
+        return title
 
     @staticmethod
     def _group_by_title(
@@ -284,7 +277,7 @@ class ScanWorker(QObject):
         """Group files by their normalized parsed title."""
         groups: dict[str, list[tuple[Path, Any]]] = {}
         for filepath, parsed in parsed_files:
-            key = ScanWorker._group_key(parsed.raw_name)
+            key = ScanWorker._group_key(parsed)
             groups.setdefault(key, []).append((filepath, parsed))
         return groups
 
@@ -464,25 +457,55 @@ class ScanWorker(QObject):
         Populates ctx.episode_cache so _format_file never touches TMDB.
         Only fetches for single-episode files (multi-episode files
         don't include episode titles).
+
+        Episodes are fetched ONE SEASON AT A TIME via a single TMDB
+        request per season, instead of one request per episode.  For a
+        full season this turns dozens of slow serial calls into one, and
+        is the main reason large series scans used to take "forever".
         """
         ep_language = self._resolve_episode_language(ctx)
 
-        pairs: set[tuple[int, int]] = set()
+        # Collect needed episode numbers grouped by season.
+        needed: dict[int, set[int]] = {}
         for _, parsed in group_entries:
             if parsed.season is not None and len(parsed.episodes) == 1:
                 for ep in parsed.episodes:
-                    pairs.add((parsed.season, ep))
+                    needed.setdefault(parsed.season, set()).add(ep)
 
-        for season, ep_num in sorted(pairs):
+        for season in sorted(needed):
             if self._cancelled:
                 break
-            try:
-                ep = tmdb_client.get_episode_details(
+            wanted = needed[season]
+
+            # Serve from cache first (repeat scans hit this path and skip
+            # the network entirely).
+            missing = set()
+            for ep_num in wanted:
+                cached = tmdb_client.cache.get_episode(
                     ctx.series.id, season, ep_num,
-                    language=ep_language,
                 )
-                if ep:
-                    ctx.episode_cache[(season, ep_num)] = ep
+                if cached:
+                    ctx.episode_cache[(season, ep_num)] = TMDBEpisode(
+                        series_id=cached["series_id"],
+                        season_number=cached["season_number"],
+                        episode_number=cached["episode_number"],
+                        name=cached["name"],
+                        overview=cached.get("overview", ""),
+                    )
+                else:
+                    missing.add(ep_num)
+
+            if not missing:
+                continue
+
+            try:
+                season_eps = tmdb_client.get_season_details(
+                    ctx.series.id, season, language=ep_language,
+                )
+                for ep_num in wanted:
+                    ep = season_eps.get(ep_num)
+                    if ep:
+                        ctx.episode_cache[(season, ep_num)] = ep
             except Exception:
                 pass  # episode detail is nice-to-have
 

@@ -147,7 +147,10 @@ class Cache:
         key = f"{series_id}:s{season}e{episode}"
         return self._cache["episodes"].get(key)
 
-    def set_episode(self, series_id: int, season: int, episode: int, result: dict) -> None:
+    def set_episode(
+        self, series_id: int, season: int, episode: int, result: dict,
+        save: bool = True,
+    ) -> None:
         """
         Cache episode details.
 
@@ -156,9 +159,17 @@ class Cache:
             season: Season number
             episode: Episode number
             result: The episode data to cache
+            save: Persist to disk immediately. Pass ``False`` when writing
+                  many episodes in a loop and call ``flush()`` once at the
+                  end to avoid rewriting the whole cache file per episode.
         """
         key = f"{series_id}:s{season}e{episode}"
         self._cache["episodes"][key] = result
+        if save:
+            self._save()
+
+    def flush(self) -> None:
+        """Persist any pending changes to disk."""
         self._save()
 
     def clear(self) -> None:

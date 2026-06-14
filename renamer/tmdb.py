@@ -558,6 +558,64 @@ class TMDBClient:
 
         return series
 
+    def get_season_details(
+        self,
+        series_id: int,
+        season: int,
+        language: str | None = None,
+    ) -> dict[int, TMDBEpisode]:
+        """
+        Fetch ALL episodes of a season in a single API request.
+
+        TMDB's ``/tv/{id}/season/{n}`` endpoint returns every episode of a
+        season at once.  Using it avoids one request *per episode* (which
+        is dramatically slower for full seasons/series).  Each episode is
+        also written to the per-episode cache so later
+        ``get_episode_details`` calls are served from cache.
+
+        Args:
+            series_id: TMDB series ID
+            season: Season number
+            language: Optional language override. When *None*, uses the
+                      client's default language.
+
+        Returns:
+            Mapping of ``episode_number -> TMDBEpisode`` (empty on failure).
+        """
+        endpoint = f"/tv/{series_id}/season/{season}"
+        params = {}
+        if language:
+            params["language"] = language
+        data = self._request(endpoint, params=params or None)
+
+        episodes: dict[int, TMDBEpisode] = {}
+        if not data or not data.get("episodes"):
+            return episodes
+
+        for ep_data in data["episodes"]:
+            ep_num = ep_data.get("episode_number")
+            if ep_num is None:
+                continue
+            ep = TMDBEpisode(
+                series_id=series_id,
+                season_number=season,
+                episode_number=ep_num,
+                name=ep_data.get("name", ""),
+                overview=ep_data.get("overview", ""),
+            )
+            episodes[ep_num] = ep
+            # Defer disk writes; flush once after the whole season.
+            self.cache.set_episode(series_id, season, ep_num, {
+                "series_id": ep.series_id,
+                "season_number": ep.season_number,
+                "episode_number": ep.episode_number,
+                "name": ep.name,
+                "overview": ep.overview,
+            }, save=False)
+
+        self.cache.flush()
+        return episodes
+
     def get_episode_details(
         self,
         series_id: int,
