@@ -10,7 +10,7 @@ from renamer.tmdb import TMDBClient
 from renamer.parser import parse_filename
 from renamer.detection import BatchContext
 from renamer.models import TMDBSeries
-from gui.worker import ScanWorker
+from gui.worker import ScanWorker, DuplicateScanWorker
 
 
 def _season_resp(n=12):
@@ -76,3 +76,60 @@ def test_repeat_scan_served_from_cache(tmp_cache_dir):
     ctx2 = BatchContext(series=TMDBSeries(99, "Show", "Show", 2020))
     w._prefetch_episodes(ctx2, entries, c)
     assert len(ctx2.episode_cache) == 12
+
+
+# -- Progressive scan output (no network: use_tmdb=False) -------------------
+
+def test_run_emits_every_file_grouped(tmp_path):
+    # Two series + one movie; files created on disk, no TMDB.
+    names = [
+        "Breaking.Bad.S01E01.mkv", "Breaking.Bad.S01E02.mkv",
+        "Dark.S01E01.mkv", "Inception.2010.mkv",
+    ]
+    for n in names:
+        (tmp_path / n).touch()
+
+    w = ScanWorker(folder_path=str(tmp_path), recursive=False,
+                   use_tmdb=False, include_episode_title=True)
+    seen = []
+    w.item_found.connect(lambda row, item: seen.append((row, item)))
+    w.run()
+
+    assert len(seen) == len(names)
+    # Rows are emitted as a dense 0..N-1 sequence (GUI appends in order).
+    assert [row for row, _ in seen] == list(range(len(names)))
+    # Files of the same series are emitted contiguously (grouped).
+    emitted_names = [item.original_path.name for _, item in seen]
+    bb = [i for i, n in enumerate(emitted_names) if n.startswith("Breaking")]
+    assert bb == [bb[0], bb[0] + 1]
+
+
+# -- Duplicate finder hashing (#5) ------------------------------------------
+
+def test_hash_helpers_are_consistent(tmp_path):
+    f = tmp_path / "a.bin"
+    f.write_bytes(b"hello world" * 1000)
+    assert DuplicateScanWorker._hash_full(f) == DuplicateScanWorker._hash_full(f)
+    assert DuplicateScanWorker._hash_quick(f) == DuplicateScanWorker._hash_quick(f)
+
+
+def test_name_duplicates_do_not_full_hash(tmp_path):
+    # Same normalized name, DIFFERENT size -> not exact dupes, so they fall
+    # into the name-duplicate path, which must NOT read whole files.
+    (tmp_path / "Movie.1080p.x264.mkv").write_bytes(b"a" * 100)
+    (tmp_path / "Movie.720p.x265.mkv").write_bytes(b"b" * 200)
+
+    w = DuplicateScanWorker(folder_path=str(tmp_path), recursive=False)
+    # Make full hashing blow up; name-group detection must still succeed.
+    w._hash_full = lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("name dupes must not full-hash"))
+
+    captured = []
+    w.finished.connect(lambda groups: captured.append(groups))
+    w.run()
+
+    assert captured, "finished should emit"
+    groups = captured[0]
+    name_groups = [g for g in groups if g["group_type"] == "name"]
+    assert len(name_groups) == 1
+    assert len(name_groups[0]["items"]) == 2

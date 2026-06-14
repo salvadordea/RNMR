@@ -1,6 +1,7 @@
 """TMDB API client module."""
 import os
 import time
+import threading
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable
@@ -13,7 +14,10 @@ from .cache import Cache
 
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 DEFAULT_TIMEOUT = 10
-RATE_LIMIT_DELAY = 0.25  # 250ms between requests to avoid rate limiting
+# Minimum spacing between request *starts*. TMDB tolerates ~50 req/s and
+# returns 429 + Retry-After when exceeded (handled below), so a small spacing
+# is safe and lets concurrent requests overlap their network latency.
+RATE_LIMIT_DELAY = 0.05
 DEFAULT_LANGUAGE = "en-US"  # Always use English for consistency
 
 
@@ -125,6 +129,7 @@ class TMDBClient:
         self.verbose = verbose
         self.language = language or DEFAULT_LANGUAGE
         self._last_request_time = 0.0
+        self._rate_lock = threading.Lock()
         self.last_raw_results: list[dict] = []
         self._log(f"Using TMDB language: {self.language}")
 
@@ -134,11 +139,14 @@ class TMDBClient:
             print(f"  [TMDB] {message}")
 
     def _rate_limit(self) -> None:
-        """Apply rate limiting between requests."""
-        elapsed = time.time() - self._last_request_time
-        if elapsed < RATE_LIMIT_DELAY:
-            time.sleep(RATE_LIMIT_DELAY - elapsed)
-        self._last_request_time = time.time()
+        """Space out request *starts*. Thread-safe so the client can be
+        shared by a small pool of workers (the HTTP call itself happens
+        after the lock is released, so latencies still overlap)."""
+        with self._rate_lock:
+            elapsed = time.time() - self._last_request_time
+            if elapsed < RATE_LIMIT_DELAY:
+                time.sleep(RATE_LIMIT_DELAY - elapsed)
+            self._last_request_time = time.time()
 
     def _request(
         self,

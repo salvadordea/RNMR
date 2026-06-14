@@ -30,6 +30,21 @@ def test_corrupt_cache_file_is_tolerated(tmp_cache_dir):
     assert c.get_series_search("x") is None
 
 
+def test_batch_mode_defers_writes_until_end(tmp_cache_dir):
+    # Performance fix: a whole scan should write the file once, not per lookup.
+    c = Cache(tmp_cache_dir)
+    c.begin_batch()
+    c.set_title_id("breaking bad", "series", 1396)
+    c.set_episode(1, 1, 1, EP)
+    # Nothing persisted yet while the batch is open.
+    assert Cache(tmp_cache_dir).get_title_id("breaking bad", "series") is None
+    c.end_batch()
+    # One flush at the end persists everything.
+    reloaded = Cache(tmp_cache_dir)
+    assert reloaded.get_title_id("breaking bad", "series") == 1396
+    assert reloaded.get_episode(1, 1, 1)["name"] == "Pilot"
+
+
 def test_episode_cache_is_language_aware(tmp_cache_dir):
     # BUG-03 regression: a title cached in one language must not be
     # returned when another language is requested.

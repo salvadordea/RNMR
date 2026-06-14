@@ -1,5 +1,6 @@
 """Cache module for storing TMDB lookups locally."""
 import json
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -8,7 +9,13 @@ CACHE_FILE = ".renamer_cache.json"
 
 
 class Cache:
-    """Local JSON cache for TMDB lookups."""
+    """Local JSON cache for TMDB lookups.
+
+    Thread-safe: a single instance may be shared by a small pool of workers
+    (used during parallel episode prefetch). Writes can also be *batched*
+    (``begin_batch`` / ``end_batch``) so a whole scan results in one disk
+    write instead of one per lookup.
+    """
 
     def __init__(self, cache_dir: Path | None = None):
         """
@@ -20,6 +27,9 @@ class Cache:
         if cache_dir is None:
             cache_dir = Path.cwd()
         self.cache_path = cache_dir / CACHE_FILE
+        self._lock = threading.RLock()
+        self._batch = False
+        self._dirty = False
         self._cache: dict[str, Any] = self._load()
 
     def _load(self) -> dict[str, Any]:
@@ -41,13 +51,35 @@ class Cache:
             "episodes": {},
         }
 
+    def _write(self) -> None:
+        """Write the cache to disk now (thread-safe)."""
+        with self._lock:
+            try:
+                with open(self.cache_path, 'w', encoding='utf-8') as f:
+                    json.dump(self._cache, f, indent=2, ensure_ascii=False)
+                self._dirty = False
+            except IOError:
+                pass  # Silently fail if we can't write cache
+
     def _save(self) -> None:
-        """Save cache to disk."""
-        try:
-            with open(self.cache_path, 'w', encoding='utf-8') as f:
-                json.dump(self._cache, f, indent=2, ensure_ascii=False)
-        except IOError:
-            pass  # Silently fail if we can't write cache
+        """Persist the cache, or defer it while a batch is open."""
+        if self._batch:
+            self._dirty = True
+        else:
+            self._write()
+
+    def begin_batch(self) -> None:
+        """Start batching writes: ``_save`` calls defer to ``end_batch``.
+
+        Lets a full scan accumulate many lookups and write the file once.
+        """
+        self._batch = True
+
+    def end_batch(self) -> None:
+        """End batching and flush any pending changes to disk."""
+        self._batch = False
+        if self._dirty:
+            self._write()
 
     def _normalize_key(self, key: str) -> str:
         """Normalize a string for use as cache key."""
@@ -162,7 +194,8 @@ class Cache:
             Cached episode data if found, None otherwise
         """
         key = self._episode_key(series_id, season, episode, language)
-        return self._cache["episodes"].get(key)
+        with self._lock:
+            return self._cache["episodes"].get(key)
 
     def set_episode(
         self, series_id: int, season: int, episode: int, result: dict,
@@ -182,7 +215,8 @@ class Cache:
             language: Language tag the episode was fetched in (e.g. "en-US").
         """
         key = self._episode_key(series_id, season, episode, language)
-        self._cache["episodes"][key] = result
+        with self._lock:
+            self._cache["episodes"][key] = result
         if save:
             self._save()
 
