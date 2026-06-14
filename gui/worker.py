@@ -2,6 +2,7 @@
 import hashlib
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Any
@@ -182,38 +183,61 @@ class ScanWorker(QObject):
                 parsed = parse_filename(filepath)
                 parsed_files.append((filepath, parsed))
 
-            # Phase 2 -- Batch identification (ALL TMDB work happens here)
-            batch_contexts = self._resolve_batch_identity(
-                parsed_files, tmdb_client, IDMapping(self.folder_path),
-                scan_context,
+            total = len(parsed_files)
+
+            # Group by title (one identity resolution per group)
+            groups = self._group_by_title(parsed_files)
+            for group_key, entries in groups.items():
+                self.log.emit(
+                    f"[BATCH] Group '{group_key}': {len(entries)} file(s)"
+                )
+
+            self._current_tmdb_client = tmdb_client
+            controller = self._make_controller(
+                tmdb_client, IDMapping(self.folder_path),
             )
-            # tmdb_client is NOT passed to Phase 3.
 
-            # Phase 3 -- Format each file (no TMDB, no dialogs)
-            for i, (filepath, parsed) in enumerate(parsed_files):
-                if self._cancelled:
-                    self.log.emit("Scan cancelled.")
-                    break
+            # Batch all cache writes for the scan into a single disk write.
+            if tmdb_client:
+                tmdb_client.cache.begin_batch()
 
-                self.progress.emit(i + 1, len(parsed_files))
+            # Phases 2 & 3 INTERLEAVED per group: resolve a group's identity
+            # (TMDB + any dialogs), then immediately format and emit its
+            # files.  Results appear progressively instead of only after the
+            # whole folder has been resolved.
+            emitted = 0
+            try:
+                for group_key, entries in groups.items():
+                    if self._cancelled:
+                        self.log.emit("Scan cancelled.")
+                        break
 
-                group_key = self._group_key(parsed.raw_name)
-                ctx = batch_contexts.get(group_key)
-
-                try:
-                    item = self._format_file(filepath, parsed, ctx)
-                    self.item_found.emit(i, item)
-                except Exception as e:
-                    item = RenameItem(
-                        original_path=filepath,
-                        new_path=None,
-                        new_name="",
-                        status="error",
-                        error_message=str(e)
+                    ctx = self._resolve_group(
+                        group_key, entries, controller, scan_context,
                     )
-                    self.item_found.emit(i, item)
-                    self.log.emit(f"[ERROR] {filepath.name}: {e}")
 
+                    for filepath, parsed in entries:
+                        if self._cancelled:
+                            break
+                        self.progress.emit(emitted + 1, total)
+                        try:
+                            item = self._format_file(filepath, parsed, ctx)
+                            self.item_found.emit(emitted, item)
+                        except Exception as e:
+                            self.item_found.emit(emitted, RenameItem(
+                                original_path=filepath,
+                                new_path=None,
+                                new_name="",
+                                status="error",
+                                error_message=str(e),
+                            ))
+                            self.log.emit(f"[ERROR] {filepath.name}: {e}")
+                        emitted += 1
+            finally:
+                if tmdb_client:
+                    tmdb_client.cache.end_batch()
+
+            self.log.emit("[BATCH] Identification executed once")
             self.finished.emit()
 
         except Exception as e:
@@ -250,32 +274,25 @@ class ScanWorker(QObject):
     # Title normalisation and grouping
     # ------------------------------------------------------------------
 
-    # Episode-pattern anchors (same patterns the parser uses)
-    _EP_ANCHOR = re.compile(
-        r'[sS]\d{1,2}[eE]\d{1,2}'
-        r'|\b\d{1,2}x\d{1,2}\b'
-        r'|[sS]eason\s*\d{1,2}\s*[eE]pisode\s*\d{1,2}'
-    )
-
     @staticmethod
-    def _group_key(raw_name: str) -> str:
-        """Derive a grouping key from the raw filename stem.
+    def _group_key(parsed: Any) -> str:
+        """Derive a grouping key from a parsed file.
 
-        Takes only the text BEFORE the episode pattern so that episode
-        titles (which vary per file) are excluded.  Falls back to the
-        full normalised stem for movies (no episode pattern).
+        Uses the parser's ``title_guess``, which already has the episode
+        pattern, year, and quality/codec/release noise stripped out.  This
+        ensures every episode of a series collapses into ONE group (so the
+        user is asked to identify the series exactly once) even when the
+        filenames are inconsistent -- e.g. some include a year or a
+        ``1080p`` tag before ``SxxExx`` and others don't.
+
+        Movies keep their year in the key so that two different films with
+        the same title (e.g. a remake) are not merged.
         """
-        # Normalise separators (dots / underscores -> spaces)
-        name = re.sub(r'[._]', ' ', raw_name)
-        name = re.sub(r'--+', ' ', name)
-
-        m = ScanWorker._EP_ANCHOR.search(name)
-        if m:
-            name = name[:m.start()]
-
-        # Strip symbols, collapse whitespace, lowercase
-        name = re.sub(r'[^\w\s]', ' ', name.lower())
-        return re.sub(r'\s+', ' ', name).strip()
+        title = re.sub(r'[^\w\s]', ' ', (parsed.title_guess or '').lower())
+        title = re.sub(r'\s+', ' ', title).strip()
+        if parsed.media_type == "movie" and parsed.year:
+            return f"{title} ({parsed.year})"
+        return title
 
     @staticmethod
     def _group_by_title(
@@ -284,7 +301,7 @@ class ScanWorker(QObject):
         """Group files by their normalized parsed title."""
         groups: dict[str, list[tuple[Path, Any]]] = {}
         for filepath, parsed in parsed_files:
-            key = ScanWorker._group_key(parsed.raw_name)
+            key = ScanWorker._group_key(parsed)
             groups.setdefault(key, []).append((filepath, parsed))
         return groups
 
@@ -292,55 +309,24 @@ class ScanWorker(QObject):
     # Phase 2 -- Batch identity resolution (ALL TMDB + ALL dialogs)
     # ------------------------------------------------------------------
 
-    def _resolve_batch_identity(
+    def _make_controller(
         self,
-        parsed_files: list[tuple[Path, Any]],
         tmdb_client: TMDBClient | None,
         id_mapping: IDMapping,
-        scan_context: ScanContext,
-    ) -> dict[str, BatchContext]:
-        """Resolve TMDB identity for every title group.
-
-        This is the ONLY place in the entire scan where TMDB calls and
-        interactive dialogs are allowed.  After this function returns,
-        no further network or UI work is needed.
-
-        Returns a dict mapping normalised title -> BatchContext.
-        """
-        groups = self._group_by_title(parsed_files)
-        batch_contexts: dict[str, BatchContext] = {}
-
-        for group_key, entries in groups.items():
-            self.log.emit(
-                f"[BATCH] Group '{group_key}': {len(entries)} file(s)"
-            )
-
-        # Build controller once per scan
-        self._current_tmdb_client = tmdb_client
-        controller = None
-        if tmdb_client:
-            controller = DetectionController(
-                tmdb_client=tmdb_client,
-                id_mapping=id_mapping,
-                settings={
-                    "always_ask_media_type": self._always_ask_media_type,
-                    "always_confirm_tmdb": self._always_confirm_tmdb,
-                    "interactive_fallback": self._interactive,
-                },
-                log_fn=lambda msg: self.log.emit(msg),
-            )
-
-        for group_key, group_entries in groups.items():
-            if self._cancelled:
-                break
-
-            ctx = self._resolve_group(
-                group_key, group_entries, controller, scan_context,
-            )
-            batch_contexts[group_key] = ctx
-
-        self.log.emit("[BATCH] Identification executed once")
-        return batch_contexts
+    ) -> DetectionController | None:
+        """Build the detection controller once per scan (None without TMDB)."""
+        if not tmdb_client:
+            return None
+        return DetectionController(
+            tmdb_client=tmdb_client,
+            id_mapping=id_mapping,
+            settings={
+                "always_ask_media_type": self._always_ask_media_type,
+                "always_confirm_tmdb": self._always_confirm_tmdb,
+                "interactive_fallback": self._interactive,
+            },
+            log_fn=lambda msg: self.log.emit(msg),
+        )
 
     def _resolve_group(
         self,
@@ -464,27 +450,88 @@ class ScanWorker(QObject):
         Populates ctx.episode_cache so _format_file never touches TMDB.
         Only fetches for single-episode files (multi-episode files
         don't include episode titles).
+
+        Episodes are fetched ONE SEASON AT A TIME via a single TMDB
+        request per season, instead of one request per episode.  For a
+        full season this turns dozens of slow serial calls into one, and
+        is the main reason large series scans used to take "forever".
         """
         ep_language = self._resolve_episode_language(ctx)
+        # The cache is language-aware, so resolve the effective tag the
+        # same way the TMDB client does (None -> client default).
+        effective_language = ep_language or tmdb_client.language
 
-        pairs: set[tuple[int, int]] = set()
+        # Collect needed episode numbers grouped by season.
+        needed: dict[int, set[int]] = {}
         for _, parsed in group_entries:
             if parsed.season is not None and len(parsed.episodes) == 1:
                 for ep in parsed.episodes:
-                    pairs.add((parsed.season, ep))
+                    needed.setdefault(parsed.season, set()).add(ep)
 
-        for season, ep_num in sorted(pairs):
-            if self._cancelled:
-                break
-            try:
-                ep = tmdb_client.get_episode_details(
+        # Serve from cache first (repeat scans skip the network entirely)
+        # and collect the seasons that still need a request.
+        seasons_to_fetch: dict[int, set[int]] = {}
+        for season in sorted(needed):
+            wanted = needed[season]
+            missing = set()
+            for ep_num in wanted:
+                cached = tmdb_client.cache.get_episode(
                     ctx.series.id, season, ep_num,
-                    language=ep_language,
+                    language=effective_language,
                 )
+                if cached:
+                    ctx.episode_cache[(season, ep_num)] = TMDBEpisode(
+                        series_id=cached["series_id"],
+                        season_number=cached["season_number"],
+                        episode_number=cached["episode_number"],
+                        name=cached["name"],
+                        overview=cached.get("overview", ""),
+                    )
+                else:
+                    missing.add(ep_num)
+            if missing:
+                seasons_to_fetch[season] = wanted
+
+        if not seasons_to_fetch:
+            return
+
+        # Fetch the missing seasons concurrently -- one request each, with
+        # their network latencies overlapping.  The TMDB client and cache
+        # are thread-safe.
+        def _fetch(season: int):
+            return season, tmdb_client.get_season_details(
+                ctx.series.id, season, language=ep_language,
+            )
+
+        results: list[tuple[int, dict]] = []
+        max_workers = min(8, len(seasons_to_fetch))
+        if max_workers <= 1:
+            for season in seasons_to_fetch:
+                if self._cancelled:
+                    break
+                try:
+                    results.append(_fetch(season))
+                except Exception:
+                    pass  # episode detail is nice-to-have
+        else:
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                futures = [
+                    pool.submit(_fetch, s)
+                    for s in seasons_to_fetch
+                    if not self._cancelled
+                ]
+                for fut in as_completed(futures):
+                    try:
+                        results.append(fut.result())
+                    except Exception:
+                        pass  # episode detail is nice-to-have
+
+        # Merge results on this (single) thread -- no races on episode_cache.
+        for season, season_eps in results:
+            for ep_num in seasons_to_fetch[season]:
+                ep = season_eps.get(ep_num)
                 if ep:
                     ctx.episode_cache[(season, ep_num)] = ep
-            except Exception:
-                pass  # episode detail is nice-to-have
 
     # ------------------------------------------------------------------
     # Unified interactive wait
@@ -840,9 +887,13 @@ class DuplicateScanWorker(QObject):
         return name
 
     @staticmethod
-    def _md5_full(path: Path, chunk_size: int = 1024 * 1024) -> str:
-        """Compute full MD5 hash for a file."""
-        h = hashlib.md5()
+    def _hash_full(path: Path, chunk_size: int = 1024 * 1024) -> str:
+        """Compute a full content hash for a file.
+
+        Uses BLAKE2b, which is noticeably faster than MD5 while remaining
+        suitable for content-equality checks (exact-duplicate detection).
+        """
+        h = hashlib.blake2b(digest_size=16)
         with path.open("rb") as f:
             while True:
                 chunk = f.read(chunk_size)
@@ -852,10 +903,10 @@ class DuplicateScanWorker(QObject):
         return h.hexdigest()
 
     @staticmethod
-    def _md5_quick(path: Path, chunk_size: int = 1024 * 1024) -> str:
-        """Compute a quick MD5 hash using first + last chunk plus size."""
+    def _hash_quick(path: Path, chunk_size: int = 1024 * 1024) -> str:
+        """Compute a quick hash from size + first/last chunk (little I/O)."""
         size = path.stat().st_size
-        h = hashlib.md5()
+        h = hashlib.blake2b(digest_size=16)
         h.update(size.to_bytes(8, byteorder="little", signed=False))
 
         with path.open("rb") as f:
@@ -889,7 +940,7 @@ class DuplicateScanWorker(QObject):
                 if self._cancelled:
                     return [], {}
                 try:
-                    quick = self._md5_quick(info["path"])
+                    quick = self._hash_quick(info["path"])
                     key = (info["size"], quick)
                     quick_groups.setdefault(key, []).append(info)
                 except Exception as e:
@@ -914,7 +965,7 @@ class DuplicateScanWorker(QObject):
                 if self._cancelled:
                     return [], {}
                 try:
-                    full_hash = self._md5_full(info["path"])
+                    full_hash = self._hash_full(info["path"])
                     full_hashes[info["path"]] = full_hash
                     full_map.setdefault(full_hash, []).append(info)
                 except Exception as e:
@@ -975,12 +1026,19 @@ class DuplicateScanWorker(QObject):
             for info in group:
                 if self._cancelled:
                     return []
-                try:
-                    if info["path"] not in full_hashes:
-                        full_hashes[info["path"]] = self._md5_full(info["path"])
-                except Exception as e:
-                    self.log.emit(f"[WARN] Full hash failed {info['path'].name}: {e}")
-                    full_hashes.setdefault(info["path"], "")
+                # Name groups are matched by name, not content -- the hash is
+                # only informational, so reuse a full hash if one already
+                # exists (from exact-dup detection) but otherwise use the
+                # cheap quick hash instead of reading the whole file.
+                file_hash = full_hashes.get(info["path"])
+                if file_hash is None:
+                    try:
+                        file_hash = self._hash_quick(info["path"])
+                    except Exception as e:
+                        self.log.emit(
+                            f"[WARN] Hash failed {info['path'].name}: {e}"
+                        )
+                        file_hash = ""
                 processed += 1
                 if total_full:
                     self.progress.emit(processed, total_full)
@@ -989,7 +1047,7 @@ class DuplicateScanWorker(QObject):
                     path=info["path"],
                     size=info["size"],
                     mtime=info["mtime"],
-                    hash=full_hashes.get(info["path"], ""),
+                    hash=file_hash,
                     norm_name=info["norm_name"],
                     group_type="name",
                 ))

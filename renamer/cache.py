@@ -1,5 +1,6 @@
 """Cache module for storing TMDB lookups locally."""
 import json
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -8,7 +9,13 @@ CACHE_FILE = ".renamer_cache.json"
 
 
 class Cache:
-    """Local JSON cache for TMDB lookups."""
+    """Local JSON cache for TMDB lookups.
+
+    Thread-safe: a single instance may be shared by a small pool of workers
+    (used during parallel episode prefetch). Writes can also be *batched*
+    (``begin_batch`` / ``end_batch``) so a whole scan results in one disk
+    write instead of one per lookup.
+    """
 
     def __init__(self, cache_dir: Path | None = None):
         """
@@ -20,6 +27,9 @@ class Cache:
         if cache_dir is None:
             cache_dir = Path.cwd()
         self.cache_path = cache_dir / CACHE_FILE
+        self._lock = threading.RLock()
+        self._batch = False
+        self._dirty = False
         self._cache: dict[str, Any] = self._load()
 
     def _load(self) -> dict[str, Any]:
@@ -41,13 +51,35 @@ class Cache:
             "episodes": {},
         }
 
+    def _write(self) -> None:
+        """Write the cache to disk now (thread-safe)."""
+        with self._lock:
+            try:
+                with open(self.cache_path, 'w', encoding='utf-8') as f:
+                    json.dump(self._cache, f, indent=2, ensure_ascii=False)
+                self._dirty = False
+            except IOError:
+                pass  # Silently fail if we can't write cache
+
     def _save(self) -> None:
-        """Save cache to disk."""
-        try:
-            with open(self.cache_path, 'w', encoding='utf-8') as f:
-                json.dump(self._cache, f, indent=2, ensure_ascii=False)
-        except IOError:
-            pass  # Silently fail if we can't write cache
+        """Persist the cache, or defer it while a batch is open."""
+        if self._batch:
+            self._dirty = True
+        else:
+            self._write()
+
+    def begin_batch(self) -> None:
+        """Start batching writes: ``_save`` calls defer to ``end_batch``.
+
+        Lets a full scan accumulate many lookups and write the file once.
+        """
+        self._batch = True
+
+    def end_batch(self) -> None:
+        """End batching and flush any pending changes to disk."""
+        self._batch = False
+        if self._dirty:
+            self._write()
 
     def _normalize_key(self, key: str) -> str:
         """Normalize a string for use as cache key."""
@@ -132,7 +164,23 @@ class Cache:
         self._cache["series_searches"][key] = result
         self._save()
 
-    def get_episode(self, series_id: int, season: int, episode: int) -> dict | None:
+    @staticmethod
+    def _episode_key(
+        series_id: int, season: int, episode: int, language: str | None,
+    ) -> str:
+        """Build the episode cache key, namespaced by language.
+
+        Episode titles/overviews are language-dependent, so the cache must
+        not return a title fetched in one language when another is active.
+        Legacy (language-less) entries simply miss and get re-fetched once.
+        """
+        base = f"{series_id}:s{season}e{episode}"
+        return f"{base}:{language}" if language else base
+
+    def get_episode(
+        self, series_id: int, season: int, episode: int,
+        language: str | None = None,
+    ) -> dict | None:
         """
         Get cached episode details.
 
@@ -140,14 +188,19 @@ class Cache:
             series_id: TMDB series ID
             season: Season number
             episode: Episode number
+            language: Language tag the episode was fetched in (e.g. "en-US").
 
         Returns:
             Cached episode data if found, None otherwise
         """
-        key = f"{series_id}:s{season}e{episode}"
-        return self._cache["episodes"].get(key)
+        key = self._episode_key(series_id, season, episode, language)
+        with self._lock:
+            return self._cache["episodes"].get(key)
 
-    def set_episode(self, series_id: int, season: int, episode: int, result: dict) -> None:
+    def set_episode(
+        self, series_id: int, season: int, episode: int, result: dict,
+        save: bool = True, language: str | None = None,
+    ) -> None:
         """
         Cache episode details.
 
@@ -156,9 +209,19 @@ class Cache:
             season: Season number
             episode: Episode number
             result: The episode data to cache
+            save: Persist to disk immediately. Pass ``False`` when writing
+                  many episodes in a loop and call ``flush()`` once at the
+                  end to avoid rewriting the whole cache file per episode.
+            language: Language tag the episode was fetched in (e.g. "en-US").
         """
-        key = f"{series_id}:s{season}e{episode}"
-        self._cache["episodes"][key] = result
+        key = self._episode_key(series_id, season, episode, language)
+        with self._lock:
+            self._cache["episodes"][key] = result
+        if save:
+            self._save()
+
+    def flush(self) -> None:
+        """Persist any pending changes to disk."""
         self._save()
 
     def clear(self) -> None:

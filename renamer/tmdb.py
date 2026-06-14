@@ -1,6 +1,7 @@
 """TMDB API client module."""
 import os
 import time
+import threading
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable
@@ -13,7 +14,10 @@ from .cache import Cache
 
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 DEFAULT_TIMEOUT = 10
-RATE_LIMIT_DELAY = 0.25  # 250ms between requests to avoid rate limiting
+# Minimum spacing between request *starts*. TMDB tolerates ~50 req/s and
+# returns 429 + Retry-After when exceeded (handled below), so a small spacing
+# is safe and lets concurrent requests overlap their network latency.
+RATE_LIMIT_DELAY = 0.05
 DEFAULT_LANGUAGE = "en-US"  # Always use English for consistency
 
 
@@ -125,6 +129,7 @@ class TMDBClient:
         self.verbose = verbose
         self.language = language or DEFAULT_LANGUAGE
         self._last_request_time = 0.0
+        self._rate_lock = threading.Lock()
         self.last_raw_results: list[dict] = []
         self._log(f"Using TMDB language: {self.language}")
 
@@ -134,11 +139,14 @@ class TMDBClient:
             print(f"  [TMDB] {message}")
 
     def _rate_limit(self) -> None:
-        """Apply rate limiting between requests."""
-        elapsed = time.time() - self._last_request_time
-        if elapsed < RATE_LIMIT_DELAY:
-            time.sleep(RATE_LIMIT_DELAY - elapsed)
-        self._last_request_time = time.time()
+        """Space out request *starts*. Thread-safe so the client can be
+        shared by a small pool of workers (the HTTP call itself happens
+        after the lock is released, so latencies still overlap)."""
+        with self._rate_lock:
+            elapsed = time.time() - self._last_request_time
+            if elapsed < RATE_LIMIT_DELAY:
+                time.sleep(RATE_LIMIT_DELAY - elapsed)
+            self._last_request_time = time.time()
 
     def _request(
         self,
@@ -558,6 +566,63 @@ class TMDBClient:
 
         return series
 
+    def get_season_details(
+        self,
+        series_id: int,
+        season: int,
+        language: str | None = None,
+    ) -> dict[int, TMDBEpisode]:
+        """
+        Fetch ALL episodes of a season in a single API request.
+
+        TMDB's ``/tv/{id}/season/{n}`` endpoint returns every episode of a
+        season at once.  Using it avoids one request *per episode* (which
+        is dramatically slower for full seasons/series).  Each episode is
+        also written to the per-episode cache so later
+        ``get_episode_details`` calls are served from cache.
+
+        Args:
+            series_id: TMDB series ID
+            season: Season number
+            language: Optional language override. When *None*, uses the
+                      client's default language.
+
+        Returns:
+            Mapping of ``episode_number -> TMDBEpisode`` (empty on failure).
+        """
+        endpoint = f"/tv/{series_id}/season/{season}"
+        effective_language = language or self.language
+        params = {"language": effective_language}
+        data = self._request(endpoint, params=params)
+
+        episodes: dict[int, TMDBEpisode] = {}
+        if not data or not data.get("episodes"):
+            return episodes
+
+        for ep_data in data["episodes"]:
+            ep_num = ep_data.get("episode_number")
+            if ep_num is None:
+                continue
+            ep = TMDBEpisode(
+                series_id=series_id,
+                season_number=season,
+                episode_number=ep_num,
+                name=ep_data.get("name", ""),
+                overview=ep_data.get("overview", ""),
+            )
+            episodes[ep_num] = ep
+            # Defer disk writes; flush once after the whole season.
+            self.cache.set_episode(series_id, season, ep_num, {
+                "series_id": ep.series_id,
+                "season_number": ep.season_number,
+                "episode_number": ep.episode_number,
+                "name": ep.name,
+                "overview": ep.overview,
+            }, save=False, language=effective_language)
+
+        self.cache.flush()
+        return episodes
+
     def get_episode_details(
         self,
         series_id: int,
@@ -578,8 +643,12 @@ class TMDBClient:
         Returns:
             TMDBEpisode if found, None otherwise
         """
-        # Check cache first
-        cached = self.cache.get_episode(series_id, season, episode)
+        effective_language = language or self.language
+
+        # Check cache first (language-aware)
+        cached = self.cache.get_episode(
+            series_id, season, episode, language=effective_language,
+        )
         if cached:
             return TMDBEpisode(
                 series_id=cached["series_id"],
@@ -591,10 +660,7 @@ class TMDBClient:
 
         # Fetch from TMDB
         endpoint = f"/tv/{series_id}/season/{season}/episode/{episode}"
-        params = {}
-        if language:
-            params["language"] = language
-        data = self._request(endpoint, params=params or None)
+        data = self._request(endpoint, params={"language": effective_language})
         if not data:
             return None
 
@@ -606,13 +672,13 @@ class TMDBClient:
             overview=data.get("overview", "")
         )
 
-        # Cache result
+        # Cache result (language-aware)
         self.cache.set_episode(series_id, season, episode, {
             "series_id": ep.series_id,
             "season_number": ep.season_number,
             "episode_number": ep.episode_number,
             "name": ep.name,
             "overview": ep.overview
-        })
+        }, language=effective_language)
 
         return ep

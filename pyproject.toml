@@ -48,3 +48,20 @@ Issues = "https://github.com/salvadordea/RNMR/issues"
 
 [tool.setuptools.packages.find]
 include = ["renamer*", "gui*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.coverage.run]
+branch = true
+source = ["renamer", "gui"]
+omit = [
+    "gui/theme.py",
+    "gui/i18n.py",
+    "*/__main__.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
