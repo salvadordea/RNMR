@@ -86,6 +86,10 @@ a = Analysis(
         "test",
         "xmlrpc",
         "pydoc",
+        # RNMR has no cryptography features; HTTPS to TMDB goes through the
+        # standard ssl module. Excluding it keeps the bundle smaller and
+        # avoids pulling an unrelated (and sometimes broken) dependency.
+        "cryptography",
     ],
     noarchive=False,
 )
